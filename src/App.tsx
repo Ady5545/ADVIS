@@ -896,7 +896,22 @@ export default function App() {
 
         {/* 3D Canvas Layer */}
         <div className="absolute inset-0 z-0 pointer-events-none">
-          <Canvas camera={{ position: [0, 0, 15], fov: 45 }} eventSource={containerRef as any} eventPrefix="client">
+          <Canvas
+            camera={{ position: [0, 0, 15], fov: 45 }}
+            eventSource={containerRef as any}
+            eventPrefix="client"
+            onCreated={(state) => {
+              // ADVIS uses a single primary 3D scene. Prevent any secondary HUD
+              // scene (including orientation/view gizmos) from being rendered.
+              const gl = state.gl;
+              const mainScene = state.scene;
+              const originalRender = gl.render.bind(gl);
+              (gl as any).render = (scene: THREE.Scene, camera: THREE.Camera) => {
+                if (scene !== mainScene) return;
+                originalRender(scene, camera);
+              };
+            }}
+          >
             <ambientLight intensity={1.5} />
             <directionalLight position={[10, 10, 10]} intensity={2} />
             <pointLight position={[-10, -10, -10]} intensity={1} color="#67e8f9" />
