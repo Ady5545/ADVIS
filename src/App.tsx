@@ -25,12 +25,35 @@ import { EngineeringHUD } from './EngineeringHUD';
 
 function CameraRig({ isSpatial }: { isSpatial?: boolean }) {
   const gestureState = useGestureEngine();
+
+  // Keep camera motion intact while making sure no orientation/axis gizmo
+  // can remain visible if one is injected into the Three.js scene.
+  useEffect(() => {
+    const hideOrientationHelpers = () => {
+      const { scene } = useThree.getState?.() ?? ({} as any);
+    };
+    return () => {};
+  }, []);
+
   useFrame((state) => {
     const lerpSpeed = isSpatial ? 0.35 : 0.05;
     state.camera.position.x += (gestureState.cameraTarget.x - state.camera.position.x) * lerpSpeed;
     state.camera.position.y += (gestureState.cameraTarget.y - state.camera.position.y) * lerpSpeed;
     state.camera.position.z += (gestureState.cameraTarget.z - state.camera.position.z) * lerpSpeed;
     state.camera.lookAt(0, 0, 0);
+
+    // Defensive cleanup for any helper object named like an orientation gizmo.
+    state.scene.traverse((object) => {
+      const name = (object.name || '').toLowerCase();
+      if (
+        name.includes('gizmo') ||
+        name.includes('axeshelper') ||
+        name.includes('orientationhelper') ||
+        name.includes('camerahelper')
+      ) {
+        object.visible = false;
+      }
+    });
   });
   return null;
 }
