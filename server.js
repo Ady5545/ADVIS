@@ -14,7 +14,7 @@ async function createApp() {
   app.use(express.json({ limit: '50mb' }));
 
   // Lightweight health endpoint used by the host and deployment checks.
-  app.get("/health", (_req, res) => {
+  app.get(["/health", "/api/health"], (_req, res) => {
     res.status(200).json({ status: "ok", service: "advis-core" });
   });
 
