@@ -32,7 +32,7 @@ Before relying on long-term ADVIS memories or conversation history in production
 
 After deployment:
 
-1. Open `/health` and confirm `{ "status": "ok", "service": "advis-core" }`.
+1. Open `/api/health` and confirm `{ "status": "ok", "service": "advis-core" }`.
 2. Request `/api/mobile/health` without authorization and confirm it does not return a successful health response.
 3. Request `/api/mobile/health` with `Authorization: Bearer <your token>` and confirm the mobile API reports healthy.
 4. Send a small test message from the Android app and check Vercel Function logs if it fails.
