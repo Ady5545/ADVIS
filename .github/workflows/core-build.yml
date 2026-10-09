@@ -27,7 +27,7 @@ jobs:
         run: node --check server.js
 
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Build web client and server bundle
         run: npm run build
