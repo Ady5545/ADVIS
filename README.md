@@ -7,7 +7,7 @@ This repository contains the ADVIS web interface and its Node/Express intelligen
 Install dependencies, build the React app and bundled server, then start it:
 
 ```bash
-npm ci
+npm ci --legacy-peer-deps
 npm run build
 npm start
 ```
