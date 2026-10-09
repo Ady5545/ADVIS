@@ -7,7 +7,7 @@ dotenv.config();
 
 const { processButlerTurn } = require("./ButlerEngine");
 
-async function startServer() {
+async function createApp() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -57,7 +57,8 @@ async function startServer() {
   }));
 
 
-  const dataDir = path.join(process.cwd(), ".data"); // Fixed: Always use workspace root for persistence in AI Studio.
+  // Vercel functions have an ephemeral filesystem. Use /tmp there to avoid read-only deployment writes; local development keeps .data in the project. Durable cross-instance memory requires an external database.
+  const dataDir = process.env.VERCEL ? path.join("/tmp", "advis-data") : path.join(process.cwd(), ".data");
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
@@ -968,12 +969,24 @@ Output JSON only, in this exact format:
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log("===================================================");
-    console.log("STARK INDUSTRIES A.D.V.I.S. HUD SERVER ONLINE");
-    console.log("Holographic frequencies broadcasted on Port " + PORT);
-    console.log("===================================================");
-  });
+  return app;
 }
 
-startServer();
+if (require.main === module) {
+  createApp()
+    .then((app) => {
+      const PORT = Number(process.env.PORT) || 3000;
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log("===================================================");
+        console.log("STARK INDUSTRIES A.D.V.I.S. HUD SERVER ONLINE");
+        console.log("Holographic frequencies broadcasted on Port " + PORT);
+        console.log("===================================================");
+      });
+    })
+    .catch((error) => {
+      console.error("Failed to start ADVIS server:", error);
+      process.exitCode = 1;
+    });
+}
+
+module.exports = { createApp };
