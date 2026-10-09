@@ -1,0 +1,33 @@
+name: ADVIS Core build check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Validate server syntax
+        run: node --check server.js
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build web client and server bundle
+        run: npm run build
