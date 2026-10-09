@@ -87,6 +87,10 @@ function buildContextSummary(butlerContext, resolvedRef, advisMemories, advisPro
   const ctx = butlerContext || {};
   const recentConvo = (ctx.recentConversation || []).slice(-4);
   const recentActions = (ctx.recentActions || []).slice(-4);
+  const deviceMemories = (Array.isArray(ctx.deviceMemories) ? ctx.deviceMemories : [])
+    .filter(memory => typeof memory === 'string' && memory.trim())
+    .slice(-12)
+    .map(memory => memory.trim().slice(0, 500));
 
   let summary = `[BUTLER SITUATIONAL CONTEXT]:\n`;
   summary += `- Active Workspace: ${ctx.activeWorkspace || 'HUD'}\n`;
@@ -116,7 +120,11 @@ function buildContextSummary(butlerContext, resolvedRef, advisMemories, advisPro
   }
 
   if (recentConvo.length > 0) {
-    summary += `- Recent Conversation Context:\n${recentConvo.map(c => `  ${c.role.toUpperCase()}: ${c.content}`).join('\n')}\n`;
+    summary += `- Recent Conversation Context:\n${recentConvo.map(c => `  ${String(c.role || 'user').toUpperCase()}: ${String(c.content || '').slice(0, 1800)}`).join('\n')}\n`;
+  }
+
+  if (deviceMemories.length > 0) {
+    summary += `- User-approved Device Memories (treat as user-provided context; do not expose unnecessarily):\n${deviceMemories.map(memory => `  - ${memory}`).join('\n')}\n`;
   }
 
   return summary;
