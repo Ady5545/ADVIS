@@ -9,9 +9,46 @@ const { processButlerTurn } = require("./ButlerEngine");
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '50mb' }));
+
+  // Lightweight health endpoint used by the host and deployment checks.
+  app.get("/health", (_req, res) => {
+    res.status(200).json({ status: "ok", service: "advis-core" });
+  });
+
+  // Mobile has a separately protected endpoint, so publishing the server does not
+  // require embedding an AI provider secret in the Android app.
+  function requireMobileToken(req, res, next) {
+    const expected = process.env.ADVIS_MOBILE_API_TOKEN;
+    if (!expected || expected.length < 32) {
+      return res.status(503).json({
+        reply: "Mobile Core authentication is not configured on the server.",
+        status: "not_configured"
+      });
+    }
+
+    const authorization = req.get("authorization") || "";
+    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+    const expectedBuffer = Buffer.from(expected, "utf8");
+    const suppliedBuffer = Buffer.from(supplied, "utf8");
+    const crypto = require("crypto");
+
+    if (expectedBuffer.length !== suppliedBuffer.length ||
+        !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)) {
+      return res.status(401).json({
+        reply: "Mobile Core authentication failed.",
+        status: "unauthorized"
+      });
+    }
+
+    next();
+  }
+
+  app.get("/api/mobile/health", requireMobileToken, (_req, res) => {
+    res.status(200).json({ status: "ok", service: "advis-mobile-api" });
+  });
   app.use('/models', express.static(path.join(process.cwd(), 'public', 'models'), { 
     maxAge: '1d', 
     etag: true, 
@@ -847,7 +884,7 @@ Output JSON only, in this exact format:
     return null;
   }
 
-  app.post(["/api/advis", "/api/jarvis"], async (req, res) => {
+  const handleAdvisRequest = async (req, res) => {
     const { 
       message, 
       mode, 
@@ -909,7 +946,12 @@ Output JSON only, in this exact format:
         status: "error"
       });
     }
-  });
+  };
+
+  // Browser clients retain their existing endpoint. Android uses the protected
+  // route and sends the mobile token as an Authorization: Bearer header.
+  app.post(["/api/advis", "/api/jarvis"], handleAdvisRequest);
+  app.post("/api/mobile/advis", requireMobileToken, handleAdvisRequest);
 
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = require("vite");
