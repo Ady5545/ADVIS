@@ -47,7 +47,7 @@
     "vite": "^6.4.3"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^5.0.0",
     "electron": "^31.3.0"
   }
 }
