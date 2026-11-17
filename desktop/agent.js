@@ -14,7 +14,9 @@
   let heartbeatTimer = null;
   let activePeer = null;
   let activeStream = null;
+  let preparedStream = null;
   let activeSessionId = "";
+  let activePeerDeviceId = "";
   const handledCommands = new Set();
   function status(message, state = "info") { statusBox.textContent = message; statusBox.className = "status " + state; }
   function safeEndpoint(raw) {
@@ -73,14 +75,53 @@
     try {
       const allow = unattended.checked;
       if (allow && !(config && config.allowUnattended)) {
-        const accepted = window.confirm("Allow enrolled devices in your private ADVIS network to start desktop sessions on this computer without asking each time? The agent remains visible and locally stoppable.");
+        const accepted = window.confirm("Allow enrolled devices in your private ADVIS network to start full desktop sessions without asking you each time? During this setup step, ADVIS will prepare a screen stream while the agent remains visible. You can stop or revoke access locally.");
         if (!accepted) { unattended.checked = false; return; }
       }
       const base = safeEndpoint(endpoint.value);
-      config = await persist({ endpoint: base, deviceName: String(name.value || (config && config.deviceName) || "ADVIS Desktop").slice(0,48), displaySourceId: displaySelect.value, allowUnattended: allow });
-      status("Settings saved in the operating-system secure credential store.", "good");
+      const deviceName = String(name.value || (config && config.deviceName) || "ADVIS Desktop").slice(0,48);
+
+      // Capture preparation is initiated by this local button click. Remote
+      // offers later reuse the already-prepared stream instead of opening a
+      // new screen-share picker for every Connect request.
+      if (allow && (!preparedStream || preparedStream.getTracks().every(track => track.readyState !== "live"))) {
+        if (!navigator.mediaDevices?.getDisplayMedia) throw new Error("This desktop runtime cannot prepare a display stream.");
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 24 }, audio: false });
+        if (!stream.getVideoTracks().some(track => track.readyState === "live")) {
+          stream.getTracks().forEach(track => track.stop());
+          throw new Error("No live display stream was selected.");
+        }
+        preparedStream = stream;
+        stream.getTracks().forEach(track => track.addEventListener("ended", () => {
+          if (preparedStream === stream) {
+            preparedStream = null;
+            if (activeSessionId) void stopSession(true);
+            status("Screen capture was stopped by the operating system. Prepare it again before the next desktop connection.", "warn");
+          }
+        }, { once: true }));
+      }
+
+      if (!allow && preparedStream) {
+        await stopSession(true);
+        preparedStream.getTracks().forEach(track => track.stop());
+        preparedStream = null;
+      }
+
+      config = await persist({ endpoint: base, deviceName, displaySourceId: displaySelect.value, allowUnattended: allow });
+      status(allow
+        ? "UNATTENDED ACCESS ON · screen stream prepared · the agent stays visible in the system tray."
+        : "Unattended desktop access is OFF. Settings saved in the OS secure credential store.",
+        allow ? "good" : "info");
       if (config.enrolled) startLoops();
-    } catch (error) { status(error.message || "Could not save settings.", "danger"); }
+    } catch (error) {
+      status(error.message || "Could not save settings.", "danger");
+    }
+  }
+
+  async function refreshCapturePreparation() {
+    if (preparedStream && preparedStream.getVideoTracks().some(track => track.readyState === "live")) return true;
+    preparedStream = null;
+    return false;
   }
   async function sendSignal(targetDeviceId, sessionId, type, extra = {}) {
     await apiJson("/api/network/commands", { method: "POST", body: JSON.stringify({ networkId: credentials.networkId, deviceId: credentials.deviceId, targetDeviceId, kind: "RTC_SIGNAL", payload: { sessionId, type, ...extra } }) });
@@ -97,24 +138,33 @@
     });
   }
   async function stopSession(notify = true) {
-    const peer = activePeer, sessionId = activeSessionId;
-    activePeer = null; activeSessionId = "";
+    const peer = activePeer, sessionId = activeSessionId, peerDeviceId = activePeerDeviceId;
+    activePeer = null; activeSessionId = ""; activePeerDeviceId = "";
     if (peer) { try { peer.close(); } catch (_) {} }
-    if (activeStream) { activeStream.getTracks().forEach(track => track.stop()); activeStream = null; }
+    activeStream = null;
     try { await api.stopSession(); } catch (_) {}
+    if (notify && sessionId && peerDeviceId) {
+      await sendSignal(peerDeviceId, sessionId, "END", { reason: "The target device stopped the desktop session." }).catch(() => {});
+    }
     stopButton.disabled = true;
-    if (notify && sessionId) status("Desktop sharing stopped. The agent remains enrolled and visible.", "good");
+    if (notify && sessionId) status("Desktop session stopped. The prepared stream remains local; the agent stays enrolled.", "good");
   }
   async function acceptRemoteDesktopOffer(command) {
     const signal = command.payload || {}, sessionId = String(signal.sessionId || "");
     if (!config.allowUnattended) { await sendSignal(command.fromDeviceId, sessionId, "END", { reason: "Unattended access is disabled." }); await acknowledge(command.id, "REJECTED", "Unattended access is disabled."); return; }
     if (activeSessionId) { await sendSignal(command.fromDeviceId, sessionId, "END", { reason: "Another session is active." }); await acknowledge(command.id, "REJECTED", "Another desktop session is active."); return; }
+    if (!await refreshCapturePreparation()) {
+      await sendSignal(command.fromDeviceId, sessionId, "END", { reason: "The target desktop stream is not prepared in this agent session." });
+      await acknowledge(command.id, "REJECTED", "Open the agent and prepare screen capture before connecting.");
+      status("DESKTOP NOT PREPARED · Open the agent and click Save device settings with unattended access enabled.", "warn");
+      return;
+    }
     try {
       if (!sessionId || !signal.sdp) throw new Error("The remote desktop offer is incomplete.");
       await api.startSession();
       const iceConfig = await apiJson("/api/network/ice-config");
       const peer = new RTCPeerConnection({ iceServers: iceConfig.iceServers || [{ urls: "stun:stun.l.google.com:19302" }] });
-      activePeer = peer; activeSessionId = sessionId;
+      activePeer = peer; activeSessionId = sessionId; activePeerDeviceId = command.fromDeviceId;
       peer.ondatachannel = event => {
         event.channel.onmessage = async messageEvent => {
           try { await api.input(JSON.parse(String(messageEvent.data || "{}"))); }
@@ -125,12 +175,9 @@
         if (peer.connectionState === "failed" || peer.connectionState === "closed") void stopSession(false);
         else if (peer.connectionState === "connected") status("LIVE DESKTOP SESSION · " + command.fromDeviceName, "good");
       };
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 24 }, audio: false });
+      const stream = preparedStream;
       activeStream = stream;
-      stream.getTracks().forEach(track => {
-        peer.addTrack(track, stream);
-        track.addEventListener("ended", () => { void sendSignal(command.fromDeviceId, sessionId, "END", { reason: "Local screen sharing stopped." }).catch(() => {}); void stopSession(false); }, { once: true });
-      });
+      stream.getTracks().forEach(track => peer.addTrack(track, stream));
       await peer.setRemoteDescription({ type: "offer", sdp: String(signal.sdp) });
       const answer = await peer.createAnswer(); await peer.setLocalDescription(answer); await waitForIce(peer);
       await sendSignal(command.fromDeviceId, sessionId, "ANSWER", { sdp: (peer.localDescription && peer.localDescription.sdp) || "" });
@@ -188,7 +235,7 @@
       endpoint.value = config.endpoint; name.value = config.deviceName; unattended.checked = config.allowUnattended;
       if (config.enrolled) startLoops(); await refreshDisplays();
       const inputMethod = config.input && config.input.supported ? config.input.method : "unsupported";
-      status((config.enrolled ? "ENROLLED · " : "NOT ENROLLED · ") + config.platform + " " + config.architecture + "\n" + "Secure storage: " + (config.secureStorageAvailable ? "ready" : "unavailable") + "\n" + "Screen permission: " + config.screenPermission + "\n" + "Native input: " + inputMethod + "\n" + "Unattended access: " + (config.allowUnattended ? "ON" : "OFF"));
+      status((config.enrolled ? "ENROLLED · " : "NOT ENROLLED · ") + config.platform + " " + config.architecture + "\n" + "Secure storage: " + (config.secureStorageAvailable ? "ready" : "unavailable") + "\n" + "Screen permission: " + config.screenPermission + "\n" + "Native input: " + inputMethod + "\n" + "Unattended access: " + (config.allowUnattended ? "ON · screen preparation required after this app launches" : "OFF"));
     } catch (error) { status(error.message || "Agent initialisation failed.", "danger"); }
   }
   $("enroll").addEventListener("click", enroll);
