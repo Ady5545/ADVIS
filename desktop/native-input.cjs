@@ -19,9 +19,22 @@ function run(file, args, timeout = 6000) {
   }));
 }
 function getNativeInputCapabilities(platform = process.platform) {
-  if (platform === "darwin") return { supported: true, method: "Apple System Events UI scripting", permission: "Accessibility", note: "User must grant Accessibility permission. Hover and scroll are not implemented." };
-  if (platform === "win32") return { supported: true, method: "Windows User32 input adapter", permission: "Interactive user desktop", note: "Input is sent only during an authenticated active desktop session." };
-  if (platform === "linux") return { supported: true, method: "xdotool", permission: "X11 session", note: "Wayland global input is not supported by this adapter." };
+  if (platform === "darwin") return {
+    supported: true, actions: ["click", "key"],
+    method: "Apple System Events UI scripting", permission: "Accessibility",
+    note: "User must grant Accessibility permission. Pointer hover and global scrolling are not implemented."
+  };
+  if (platform === "win32") return {
+    supported: true, actions: ["pointer", "click", "scroll", "key"],
+    method: "Windows User32 input adapter", permission: "Interactive user desktop",
+    note: "Input is sent only during an authenticated active desktop session."
+  };
+  if (platform === "linux") {
+    const wayland = Boolean(process.env.WAYLAND_DISPLAY) || process.env.XDG_SESSION_TYPE === "wayland";
+    return wayland
+      ? { supported: false, actions: [], method: "xdotool", permission: "X11 session", note: "Wayland global input is not supported by this adapter." }
+      : { supported: true, actions: ["pointer", "click", "scroll", "key"], method: "xdotool", permission: "X11 session", note: "The xdotool package must be installed on the host." };
+  }
   return { supported: false, method: "none", note: "This operating system is not supported." };
 }
 async function dispatchNativeInput(raw, platform = process.platform, resources = __dirname) {
