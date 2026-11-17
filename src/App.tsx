@@ -123,6 +123,7 @@ export default function App() {
     }
   }, [wakeWordEnergy]);
   const [currentView, setCurrentView] = useState<string>('home');
+  const [currentConversationId, setCurrentConversationId] = useState<string>('');
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [strictSecurity, setStrictSecurity] = useState<boolean>(false);
@@ -204,7 +205,7 @@ export default function App() {
       await fetch('/api/advis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: "clear chat", mode: "normal", deviceId: localStorage.getItem('advis_device_id') })
+        body: JSON.stringify({ message: "clear chat", mode: "normal", deviceId: localStorage.getItem('advis_device_id'), conversationId: currentConversationId })
       });
       if (soundEnabled && window.speechSynthesis) {
         const u = new SpeechSynthesisUtterance("Clean slate protocol engaged, sir. All records expunged.");
@@ -452,8 +453,16 @@ export default function App() {
     }
     localStorage.setItem('advis_device_id', id);
     
-    // Fetch history in background immediately
-    fetchHistory(id);
+    // Each browser/device starts in its own conversation. Shared memory remains
+    // cloud-backed, while transcripts are opened deliberately from History.
+    const conversationKey = `advis_active_conversation_${id}`;
+    let conversationId = localStorage.getItem(conversationKey);
+    if (!conversationId) {
+      conversationId = `conv_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(conversationKey, conversationId);
+    }
+    setCurrentConversationId(conversationId);
+    setMessages([{ role: 'assistant', content: 'Online. A fresh conversation is ready; your saved memory and project context remain available.', timestamp: Date.now() }]);
 
     // Fast cinematic initial boot sequence (~1000ms)
     const bootTimer = setTimeout(() => {
@@ -471,22 +480,33 @@ export default function App() {
     };
   }, []);
 
-  const fetchHistory = async (deviceId: string) => {
+  const conversationStorageKey = () => `advis_active_conversation_${localStorage.getItem('advis_device_id') || 'default'}`;
+
+  const fetchHistory = async (conversationId: string) => {
+    const res = await fetch(`/api/history/${encodeURIComponent(conversationId)}`);
+    if (!res.ok) throw new Error('Conversation history could not be loaded');
+    const data = await res.json();
+    return Array.isArray(data) ? data.map((m: any) => ({ ...m, timestamp: Number(m.timestamp) || Date.now() })) : [];
+  };
+
+  const handleOpenConversation = async (conversationId: string) => {
     try {
-      const res = await fetch(`/api/history?deviceId=${deviceId}`);
-      const data = await res.json();
-      if (data && data.length > 0) {
-        setMessages(data.map((m: any) => ({
-          ...m,
-          timestamp: Date.now()
-        })));
-      } else {
-        setMessages([{ role: 'assistant', content: 'Welcome online, Sir. Holographic interface fully restored and functional.', timestamp: Date.now() }]);
-      }
-    } catch (e) {
-      console.warn("fetch history warn:", (e as Error).message);
-      setMessages([{ role: 'assistant', content: 'Welcome online, Sir. (Offline Mode Active)', timestamp: Date.now() }]);
+      const history = await fetchHistory(conversationId);
+      setCurrentConversationId(conversationId);
+      localStorage.setItem(conversationStorageKey(), conversationId);
+      setMessages(history.length ? history : [{ role: 'assistant', content: 'This conversation is empty. Continue whenever you are ready.', timestamp: Date.now() }]);
+      setCurrentView('home');
+    } catch (error) {
+      console.warn('Conversation restore failed:', error);
     }
+  };
+
+  const handleNewConversation = () => {
+    const conversationId = `conv_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Math.random().toString(36).slice(2)}`;
+    setCurrentConversationId(conversationId);
+    localStorage.setItem(conversationStorageKey(), conversationId);
+    setMessages([{ role: 'assistant', content: 'New conversation ready. Your saved memory and project knowledge are still connected.', timestamp: Date.now() }]);
+    setCurrentView('home');
   };
 
   const handleSendMessage = async (text: string, file?: {name: string, content: string, isImage?: boolean, mimeType?: string} | null): Promise<string> => {
@@ -565,6 +585,7 @@ export default function App() {
           image: newMessage.image, 
           mode: 'normal', 
           deviceId,
+          conversationId: currentConversationId,
           currentSpatialObject,
           selectedComponentId,
           hoveredComponentId,
@@ -1265,6 +1286,8 @@ export default function App() {
         currentView={currentView} 
         setView={setCurrentView} 
         messages={messages} 
+        onOpenConversation={handleOpenConversation}
+        onNewConversation={handleNewConversation}
         hologramIntensity={hologramIntensity} 
         setHologramIntensity={setHologramIntensity} 
         soundEnabled={soundEnabled} 
