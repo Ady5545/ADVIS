@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src https: http://localhost:*;">
+<title>ADVIS Desktop Agent</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#06111d;color:#e5f7ff}body{margin:0;padding:28px;background:radial-gradient(circle at 10% 0%,#11334a 0,#06111d 55%)}main{max-width:760px;margin:0 auto}.eyebrow{color:#53c7ec;letter-spacing:.2em;font-size:11px;font-weight:700}h1{margin:8px 0 4px;font-size:28px}.muted{color:#8ba8b9;font-size:13px;line-height:1.55}.card{margin-top:18px;padding:18px;border:1px solid #1b526b;background:#071b2a;border-radius:16px}label{display:block;color:#82dfff;font-size:11px;letter-spacing:.1em;margin:14px 0 6px}input,select{box-sizing:border-box;width:100%;padding:11px 12px;color:#e5f7ff;background:#04111c;border:1px solid #23516a;border-radius:8px}button{border:1px solid #2f98bd;color:#e5f7ff;background:#0c3448;padding:10px 14px;border-radius:9px;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.row button{flex:1}.good{color:#73edba}.warn{color:#ffca79}.danger{color:#ff8888}.status{padding:12px;border-radius:10px;background:#03111b;border:1px solid #17465c;font-size:12px;margin-top:12px;white-space:pre-wrap}.toggle{display:flex;align-items:center;gap:10px;margin-top:16px;font-size:13px}.toggle input{width:auto}small{color:#85a7bb;line-height:1.5;display:block}
+</style></head><body><main>
+<div class="eyebrow">ADVIS · SPATIAL INTELLIGENCE</div><h1>Desktop Agent</h1>
+<p class="muted">A trusted, visible companion for your enrolled ADVIS devices. It shares this computer only after local setup and an explicit unattended-access choice. The tray icon and session status remain visible.</p>
+<section class="card"><div class="eyebrow">DEVICE ENROLLMENT</div>
+<label for="endpoint">ADVIS SERVER</label><input id="endpoint" value="https://advis-ebon.vercel.app" autocomplete="url">
+<label for="name">DEVICE NAME</label><input id="name" maxlength="48" autocomplete="off">
+<label for="invite">ONE-TIME INVITATION LINK OR CODE</label><input id="invite" placeholder="Paste the owner-generated invite link">
+<div class="row"><button id="enroll">Enroll this computer</button><button id="refreshScreens" type="button">Refresh displays</button></div>
+<label for="display">SCREEN TO SHARE</label><select id="display"></select>
+<div class="toggle"><input id="unattended" type="checkbox"><span>Allow unattended desktop sessions after this device&#39;s setup</span></div>
+<small>Default is OFF. Enabling it is a local choice. Operating-system Screen Recording and Accessibility permissions still apply. A visible session state and local Stop control remain available.</small>
+<div class="row"><button id="save">Save device settings</button><button id="autostart">Enable launch at login</button></div></section>
+<section class="card"><div class="eyebrow">LIVE DEVICE STATUS</div><div id="status" class="status">Starting agent…</div>
+<div class="row"><button id="stop" class="danger" disabled>Stop active session</button><button id="permissions">Open OS permissions</button></div>
+<p class="muted">Closing this window hides the app to its visible tray icon. Use Quit from the tray menu to exit completely.</p></section>
+</main><script src="./agent.js"></script></body></html>
