@@ -31,8 +31,14 @@ test("native input adapter accepts supported keys and rejects malformed input", 
 });
 
 test("native input capabilities are explicit for supported desktop platforms", () => {
-  assert.equal(getNativeInputCapabilities("darwin").supported, true);
-  assert.equal(getNativeInputCapabilities("win32").supported, true);
-  assert.equal(getNativeInputCapabilities("linux").supported, true);
+  const mac = getNativeInputCapabilities("darwin");
+  const windows = getNativeInputCapabilities("win32");
+  const linux = getNativeInputCapabilities("linux");
+  assert.equal(mac.supported, true);
+  assert.deepEqual(mac.actions, ["click", "key"]);
+  assert.equal(windows.supported, true);
+  assert.deepEqual(windows.actions, ["pointer", "click", "scroll", "key"]);
+  assert.equal(linux.supported, true);
+  assert.deepEqual(linux.actions, ["pointer", "click", "scroll", "key"]);
   assert.equal(getNativeInputCapabilities("freebsd").supported, false);
 });
