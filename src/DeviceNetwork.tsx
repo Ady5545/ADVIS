@@ -87,6 +87,22 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [lastSync, setLastSync] = useState(0);
   const handled = useRef(new Set<string>());
 
+
+
+  useEffect(() => {
+    localStorage.setItem(DEVICE_KEY, deviceId);
+    localStorage.setItem(NAME_KEY, deviceName);
+  }, [deviceId, deviceName]);
+
+  const authHeaders = useCallback(() => ({
+    "Content-Type": "application/json",
+    Authorization: "Bearer " + deviceToken
+  }), [deviceToken]);
+
+  const addActivity = useCallback((title: string, detail: string) => {
+    setActivity(prev => [{ id: randomId(), title, detail, at: Date.now() }, ...prev].slice(0, 12));
+  }, []);
+
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") {
       setError("This browser does not support automatic tab discovery. Try a current version of Chrome, Edge, or Firefox.");
@@ -152,20 +168,6 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       tabChannel.current = null;
     };
   }, [tabId, deviceName, addActivity]);
-
-  useEffect(() => {
-    localStorage.setItem(DEVICE_KEY, deviceId);
-    localStorage.setItem(NAME_KEY, deviceName);
-  }, [deviceId, deviceName]);
-
-  const authHeaders = useCallback(() => ({
-    "Content-Type": "application/json",
-    Authorization: "Bearer " + deviceToken
-  }), [deviceToken]);
-
-  const addActivity = useCallback((title: string, detail: string) => {
-    setActivity(prev => [{ id: randomId(), title, detail, at: Date.now() }, ...prev].slice(0, 12));
-  }, []);
 
   const saveCredentials = useCallback((id: string, secret: string, token: string) => {
     localStorage.setItem(NETWORK_KEY, id);
