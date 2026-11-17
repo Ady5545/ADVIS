@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, Radio, RefreshCw, Send, ShieldCheck, Smartphone, Monitor, X, Check, AlertTriangle, MonitorPlay, Square } from "lucide-react";
 
 type Device = {
@@ -43,13 +43,6 @@ const NAME_KEY = "advis_device_name";
 
 function randomId() {
   return crypto.randomUUID().replace(/-/g, "");
-}
-
-function randomSecret() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  let binary = "";
-  bytes.forEach(value => { binary += String.fromCharCode(value); });
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function deviceLabel() {
@@ -999,7 +992,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               {controlAction === "SPEAK" && <input value={speakText} onChange={e => setSpeakText(e.target.value)} maxLength={500} placeholder="Text for the other device to speak" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
               <button onClick={sendControl} disabled={!selectedDevice || selectedDevice === deviceId} className="bg-cyan-500/15 border border-cyan-400/40 rounded p-2 text-xs disabled:opacity-40">REQUEST REMOTE ACTION</button>
               <p className="text-[10px] text-cyan-500/60">The receiving device must approve each ADVIS action before it executes.</p>
-              <button onClick={startRemoteSession} disabled={!selectedDevice || selectedDevice.startsWith("tab:") || devices.find(item => item.id === selectedDevice)?.status !== "ONLINE" || busy} className="flex items-center justify-center gap-2 bg-cyan-500/20 border border-cyan-300/50 rounded p-3 text-xs tracking-widest disabled:opacity-40"><MonitorPlay size={15}/>{busy ? "CONNECTING..." : "START LIVE REMOTE SESSION"}</button>
+              <button onClick={startRemoteSession} disabled={!selectedDevice || selectedDevice.startsWith("tab:") || devices.find(item => item.id === selectedDevice)?.status !== "ONLINE" || busy} className="flex items-center justify-center gap-2 bg-cyan-500/20 border border-cyan-300/50 rounded p-3 text-xs tracking-widest disabled:opacity-40"><MonitorPlay size={15}/>{busy ? "CONNECTING..." : devices.find(item => item.id === selectedDevice)?.platform.includes("ADVIS Desktop Agent") ? "CONNECT TO DESKTOP" : "START LIVE ADVIS TAB SESSION"}</button>
               {remoteSessionStatus && (
                 <div className="flex items-center justify-between gap-2 text-[10px] text-cyan-200 border border-cyan-500/20 rounded-lg p-2">
                   <span>{remoteSessionStatus}</span>
