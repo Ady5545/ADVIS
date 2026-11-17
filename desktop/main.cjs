@@ -74,6 +74,7 @@ function createWindow() {
   mainWindow.on("close", event => { if (!isQuitting) { event.preventDefault(); mainWindow.hide(); } });
 }
 ipcMain.handle("agent:config:get", () => publicConfig());
+ipcMain.handle("agent:credentials:get", () => ({ endpoint: config.endpoint, networkId: config.networkId, deviceId: config.deviceId, deviceToken: config.deviceToken }));
 ipcMain.handle("agent:config:save", (_event, next) => saveConfig(next || {}));
 ipcMain.handle("agent:displays:list", () => listDisplays());
 ipcMain.handle("agent:session:start", async () => {
@@ -84,7 +85,7 @@ ipcMain.handle("agent:session:start", async () => {
   if (mainWindow) mainWindow.webContents.send("agent:status", publicConfig());
   return publicConfig();
 });
-ipcMain.handle("agent:session:stop", () => { stopAgentSession(); return publicConfig(); });
+ipcMain.handle("agent:session:stop", () => { sessionActive = false; session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => callback(null)); updateTray(); return publicConfig(); });
 ipcMain.handle("agent:input", async (_event, input) => {
   if (!sessionActive || !config.allowUnattended) throw new Error("No authorised desktop session is active.");
   if (!input || typeof input !== "object") throw new Error("Invalid remote input event.");
