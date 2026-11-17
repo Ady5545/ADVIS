@@ -189,20 +189,18 @@ async function createApp() {
   // Devices poll for commands; no long-lived WebSocket server is required.
   const networkStore = firebaseMemoryStore;
 
-  // Non-secret diagnostic so the Devices panel can distinguish a missing
-  // cloud database from a browser/network transport failure.
-  app.get("/api/network/status", (_req, res) => {
-    const ready = Boolean(
-      networkStore &&
-      networkStore.getNetwork &&
-      networkStore.createNetwork &&
-      networkStore.getNetworkDevice &&
-      networkStore.setNetworkDevice &&
-      networkStore.listNetworkDevices &&
-      networkStore.createNetworkCommand &&
-      networkStore.getNetworkCommand &&
-      networkStore.listNetworkCommands
-    );
+  // Non-secret diagnostic. This checks the actual OAuth + Firestore read path,
+  // not just whether a JavaScript adapter with expected methods was constructed.
+  app.get("/api/network/status", async (_req, res) => {
+    const requiredMethods = [
+      "getNetwork", "createNetwork", "getNetworkDevice", "setNetworkDevice",
+      "listNetworkDevices", "createNetworkCommand", "getNetworkCommand",
+      "listNetworkCommands", "checkConnection"
+    ];
+    const adapterReady = Boolean(networkStore && requiredMethods.every(method =>
+      typeof networkStore[method] === "function"
+    ));
+
     let projectIdAvailable = Boolean(process.env.FIREBASE_PROJECT_ID);
     if (!projectIdAvailable && process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
       try {
@@ -211,17 +209,55 @@ async function createApp() {
         projectIdAvailable = Boolean(account.project_id);
       } catch (_) {}
     }
+
     const missing = [];
     if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) missing.push("FIREBASE_SERVICE_ACCOUNT_JSON");
     if (!projectIdAvailable) missing.push("FIREBASE_PROJECT_ID (or service-account project_id)");
-    return res.json({
-      configured: ready,
-      provider: "Firestore",
-      missing,
-      reason: ready ? null : "The private cloud device directory is not configured on this deployment.",
-      serverTime: Date.now()
-    });
+
+    if (!adapterReady) {
+      return res.json({
+        configured: false,
+        databaseConnected: false,
+        state: "NOT_CONFIGURED",
+        provider: "Firestore",
+        missing,
+        reason: firebaseSetupError
+          ? "Firebase server configuration could not be initialized. Verify the service-account JSON and project settings."
+          : "The server-side Firebase service account is not configured.",
+        serverTime: Date.now()
+      });
+    }
+
+    try {
+      const probe = await networkStore.checkConnection();
+      return res.json({
+        configured: true,
+        databaseConnected: true,
+        state: "READY",
+        provider: "Firestore",
+        checkedAt: probe.checkedAt || Date.now(),
+        serverTime: Date.now()
+      });
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      let reason = "Firestore could not be reached. Check the Firebase project and service availability.";
+      if (status === 401 || status === 403) {
+        reason = "Firestore rejected the server credentials or permissions. Grant the service account access to the database.";
+      } else if (status === 404) {
+        reason = "The Firestore database or target path was not found. Confirm the database is initialized in the configured project.";
+      }
+      return res.json({
+        configured: true,
+        databaseConnected: false,
+        state: "ERROR",
+        provider: "Firestore",
+        errorCode: status || "CONNECTION_FAILED",
+        reason,
+        serverTime: Date.now()
+      });
+    }
   });
+
   const hashNetworkSecret = value => crypto.createHash("sha256").update(String(value)).digest("hex");
   const safeNetworkId = value => /^[A-Za-z0-9_-]{20,100}$/.test(String(value || ""));
   const safeDeviceId = value => /^[A-Za-z0-9_-]{12,100}$/.test(String(value || ""));
