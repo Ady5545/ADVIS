@@ -269,6 +269,53 @@ function createFirebaseMemoryStore() {
     return listCollection(commandCollection(networkId));
   }
 
+  function inviteCollection(networkId) {
+    return networkDocument(networkId) + "/invites";
+  }
+
+  async function createNetworkInvite(networkId, invite) {
+    const path = inviteCollection(networkId) + "/" + safeDocumentId(invite.id);
+    await request(path + "?currentDocument.exists=false", {
+      method: "PATCH",
+      body: JSON.stringify({ fields: { payload: { stringValue: JSON.stringify(invite) } } })
+    });
+    return invite;
+  }
+
+  async function consumeNetworkInvite(networkId, inviteId, now = Date.now()) {
+    const path = inviteCollection(networkId) + "/" + safeDocumentId(inviteId);
+    const document = await request(path).catch(error => {
+      if (error.status === 404) return null;
+      throw error;
+    });
+    const invite = decodeDocument(document);
+    if (!document?.updateTime || !invite || invite.usedAt || Number(invite.expiresAt || 0) <= now) {
+      return false;
+    }
+    const updated = { ...invite, usedAt: now };
+    const query = new URLSearchParams({
+      "updateMask.fieldPaths": "payload",
+      "currentDocument.updateTime": document.updateTime
+    });
+    try {
+      await request(path + "?" + query.toString(), {
+        method: "PATCH",
+        body: JSON.stringify({ fields: { payload: { stringValue: JSON.stringify(updated) } } })
+      });
+      return true;
+    } catch (error) {
+      // Firestore's update-time precondition makes invite consumption single-use
+      // even when two devices attempt to redeem the same code simultaneously.
+      if (error.status === 409 || error.status === 400) return false;
+      throw error;
+    }
+  }
+
+  async function deleteNetworkDevice(networkId, deviceId) {
+    await deleteDocument(deviceCollection(networkId) + "/" + safeDocumentId(deviceId));
+    return true;
+  }
+
   // A real health probe: fetch an OAuth access token and perform a harmless
   // Firestore read. Merely checking that adapter methods exist does not prove
   // the production service account or database is usable.
@@ -291,6 +338,9 @@ function createFirebaseMemoryStore() {
     createNetworkCommand,
     getNetworkCommand,
     listNetworkCommands,
+    createNetworkInvite,
+    consumeNetworkInvite,
+    deleteNetworkDevice,
     checkConnection
   };
 }
