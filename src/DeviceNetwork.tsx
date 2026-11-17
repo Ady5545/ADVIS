@@ -66,6 +66,8 @@ async function readJson(response: Response) {
   if (!response.ok) {
     const error = new Error(data.error || `ADVIS API returned HTTP ${response.status}. Check the deployed API route.`);
     (error as any).status = response.status;
+    const retryAfter = Number(response.headers.get("Retry-After") || 0);
+    if (Number.isFinite(retryAfter) && retryAfter > 0) (error as any).retryAfterMs = retryAfter * 1000;
     throw error;
   }
   if (!raw || !Object.keys(data).length) {
@@ -486,6 +488,8 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   useEffect(() => {
     if (!networkId || !deviceToken) return;
     let stopped = false;
+    let timer: number | null = null;
+    let retryDelay = 3000;
     const sync = async () => {
       try {
         await fetch("/api/network/heartbeat", {
@@ -503,6 +507,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         if (!stopped) {
           setDevices(list);
           setLastSync(Date.now());
+          retryDelay = 3000;
           if (!selectedDevice) {
             const firstOther = list.find((item: Device) => item.id !== deviceId && item.status === "ONLINE");
             if (firstOther) setSelectedDevice(firstOther.id);
@@ -573,16 +578,20 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         if (!stopped && Number(e?.status) === 410) {
           setError((e.message || "This network uses the legacy invitation format.") + " Use DISCONNECT THIS DEVICE, then create a new private network and re-enroll the other devices with one-time invites.");
           setDevices([]);
-          window.clearInterval(timer);
+          stopped = true;
+          if (timer !== null) window.clearTimeout(timer);
           addActivity("SECURITY UPGRADE REQUIRED", "Legacy shared-secret network stopped; re-enrol on the owner-managed protocol.");
         } else if (!stopped) {
           setError(e.message || "Device network temporarily unavailable.");
+          const serverDelay = Number(e?.retryAfterMs || 0);
+          retryDelay = Math.min(60_000, Math.max(serverDelay, retryDelay * 2, 3000));
         }
+      } finally {
+        if (!stopped) timer = window.setTimeout(sync, retryDelay);
       }
     };
-    sync();
-    const timer = window.setInterval(sync, 3000);
-    return () => { stopped = true; window.clearInterval(timer); };
+    void sync();
+    return () => { stopped = true; if (timer !== null) window.clearTimeout(timer); };
   }, [networkId, deviceToken, deviceId, deviceName, selectedDevice, authHeaders, sendCommand, acknowledge, addActivity, closeRemotePeer]);
 
   const sendPrompt = async () => {
