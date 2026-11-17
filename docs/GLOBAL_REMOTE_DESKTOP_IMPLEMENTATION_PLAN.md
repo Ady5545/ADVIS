@@ -147,4 +147,4 @@
 |---|---|---|
 | 2026-11-17 | Added a server-side device-network status endpoint and explicit Devices-panel API/configuration errors. | Production build READY; live Firestore probe and cross-network enrollment remain pending. |
 | 2026-11-17 | Audited the current repository: browser localStorage identity, Firestore polling relay, and a browser-tab WebRTC prototype exist; no native Electron main/preload or desktop agent is present. | GitHub main tree and Vercel production deployment history inspected. |
-| 2026-11-17 | Began Phase 0: adding a real Firestore connectivity probe so the status endpoint can distinguish adapter presence from authenticated database access. | In progress. |
+| 2026-11-17 | Added Firestore connectivity probe and updated /api/network/status to report missing setup, adapter initialization failure, live database connectivity, permission errors, and missing database/path separately. | Source committed; production build pending and live Firestore test still required. |
