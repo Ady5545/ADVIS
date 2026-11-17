@@ -67,7 +67,9 @@ async function readJson(response: Response) {
   let data: any = {};
   try { data = raw ? JSON.parse(raw) : {}; } catch (_) {}
   if (!response.ok) {
-    throw new Error(data.error || `ADVIS API returned HTTP ${response.status}. Check the deployed API route.`);
+    const error = new Error(data.error || `ADVIS API returned HTTP ${response.status}. Check the deployed API route.`);
+    (error as any).status = response.status;
+    throw error;
   }
   if (!raw || !Object.keys(data).length) {
     throw new Error("ADVIS API returned an empty or non-JSON response. The server route may not be deployed.");
@@ -567,7 +569,14 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
           }
         }
       } catch (e: any) {
-        if (!stopped) setError(e.message || "Device network temporarily unavailable.");
+        if (!stopped && Number(e?.status) === 410) {
+          setError((e.message || "This network uses the legacy invitation format.") + " Use DISCONNECT THIS DEVICE, then create a new private network and re-enroll the other devices with one-time invites.");
+          setDevices([]);
+          window.clearInterval(timer);
+          addActivity("SECURITY UPGRADE REQUIRED", "Legacy shared-secret network stopped; re-enrol on the owner-managed protocol.");
+        } else if (!stopped) {
+          setError(e.message || "Device network temporarily unavailable.");
+        }
       }
     };
     sync();
