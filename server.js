@@ -188,6 +188,40 @@ async function createApp() {
   // Vercel functions are stateless, so Firestore is the durable relay.
   // Devices poll for commands; no long-lived WebSocket server is required.
   const networkStore = firebaseMemoryStore;
+
+  // Non-secret diagnostic so the Devices panel can distinguish a missing
+  // cloud database from a browser/network transport failure.
+  app.get("/api/network/status", (_req, res) => {
+    const ready = Boolean(
+      networkStore &&
+      networkStore.getNetwork &&
+      networkStore.createNetwork &&
+      networkStore.getNetworkDevice &&
+      networkStore.setNetworkDevice &&
+      networkStore.listNetworkDevices &&
+      networkStore.createNetworkCommand &&
+      networkStore.getNetworkCommand &&
+      networkStore.listNetworkCommands
+    );
+    let projectIdAvailable = Boolean(process.env.FIREBASE_PROJECT_ID);
+    if (!projectIdAvailable && process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      try {
+        const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON.trim();
+        const account = JSON.parse(raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8"));
+        projectIdAvailable = Boolean(account.project_id);
+      } catch (_) {}
+    }
+    const missing = [];
+    if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) missing.push("FIREBASE_SERVICE_ACCOUNT_JSON");
+    if (!projectIdAvailable) missing.push("FIREBASE_PROJECT_ID (or service-account project_id)");
+    return res.json({
+      configured: ready,
+      provider: "Firestore",
+      missing,
+      reason: ready ? null : "The private cloud device directory is not configured on this deployment.",
+      serverTime: Date.now()
+    });
+  });
   const hashNetworkSecret = value => crypto.createHash("sha256").update(String(value)).digest("hex");
   const safeNetworkId = value => /^[A-Za-z0-9_-]{20,100}$/.test(String(value || ""));
   const safeDeviceId = value => /^[A-Za-z0-9_-]{12,100}$/.test(String(value || ""));
