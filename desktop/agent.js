@@ -201,9 +201,12 @@
   }
   async function heartbeat() {
     if (!credentials || !credentials.networkId || !credentials.deviceToken) return;
-    const inputSupported = Boolean(config.input && config.input.supported);
+    const actions = Array.isArray(config.input?.actions) ? config.input.actions : [];
     const capabilities = ["FULL_DESKTOP_CAPTURE"];
-    if (inputSupported) capabilities.push("POINTER", "CLICK", "KEYBOARD", "SCROLL");
+    if (actions.includes("pointer")) capabilities.push("POINTER");
+    if (actions.includes("click")) capabilities.push("CLICK");
+    if (actions.includes("key")) capabilities.push("KEYBOARD");
+    if (actions.includes("scroll")) capabilities.push("SCROLL");
     if (config.allowUnattended) capabilities.push("UNATTENDED_DESKTOP");
     await apiJson("/api/network/heartbeat", { method: "POST", body: JSON.stringify({
       networkId: credentials.networkId, deviceId: credentials.deviceId,
