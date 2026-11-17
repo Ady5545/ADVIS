@@ -1255,13 +1255,30 @@ Output JSON only, in this exact format:
     const deviceId = conversationKey;
     if (!chatHistories[deviceId]) chatHistories[deviceId] = [];
 
-    const butlerContext = clientButlerContext || {
+    const clientContext = clientButlerContext || {
       activeProjectId,
       activeWorkspace: currentSpatialObject ? 'SPATIAL' : 'HUD',
       activeSpatialObject: currentSpatialObject,
       selectedComponentId,
       hoveredComponentId,
       recentActions: []
+    };
+
+    // Conversation transcripts stay separate in the interface, but ADVIS can
+    // consult a compact cross-device window of recent discussion as context.
+    const sharedRecentConversation = Object.entries(chatHistories || {})
+      .flatMap(([sourceConversationId, entries]) => (Array.isArray(entries) ? entries : []).map(entry => ({
+        role: entry.role,
+        content: entry.content,
+        timestamp: Number(entry.timestamp) || 0,
+        sourceConversationId
+      })))
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-24);
+
+    const butlerContext = {
+      ...clientContext,
+      recentConversation: sharedRecentConversation
     };
 
     try {
