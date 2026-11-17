@@ -404,14 +404,15 @@ async function createApp() {
         return; 
     }
     
-    if (userMessage.split(' ').length < 3 && !lower.includes("use") && !lower.includes("prefer") && !lower.includes("project")) {
-        return; // Too short to be a meaningful persistent memory
+    const explicitPreferenceOrCorrection = /\b(use|prefer|always|never|keep|avoid|rather than|instead of|from now on|remember|call me|do not|don't|dont|change to|switch to|no longer|not)\b/i.test(userMessage);
+    if (userMessage.split(/\s+/).filter(Boolean).length < 3 && !explicitPreferenceOrCorrection && !lower.includes("project")) {
+        return; // Skip fragments, but preserve compact preferences and corrections.
     }
     if (isGreeting) return;
 
     try {
       // Gather relevant existing memories to let the LLM detect duplicates/contradictions
-      let existingContext = advisMemories.map(m => `ID: ${m.id} | Project: ${m.projectId || 'GLOBAL'} | Category: ${m.category} | Content: ${m.content}`).join('\n');
+      let existingContext = advisMemories.slice(-160).map(m => `ID: ${m.id} | Project: ${m.projectId || 'GLOBAL'} | Category: ${m.category} | Content: ${m.content}`).join('\n');
       if (!existingContext) existingContext = "NONE";
 
       const prompt = `
