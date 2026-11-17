@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Radio, RefreshCw, Send, ShieldCheck, Smartphone, Monitor, X, Check, AlertTriangle, MonitorPlay, Pencil, Square } from "lucide-react";
+import { Copy, Radio, RefreshCw, Send, ShieldCheck, Smartphone, Monitor, X, Check, AlertTriangle, MonitorPlay, Square } from "lucide-react";
 
 type Device = {
   id: string;
@@ -165,6 +165,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [remoteSessionRequest, setRemoteSessionRequest] = useState<RemoteSessionRequest | null>(null);
   const [remoteSessionStatus, setRemoteSessionStatus] = useState("");
   const [remoteSessionId, setRemoteSessionId] = useState("");
+  const [remoteSessionPeerId, setRemoteSessionPeerId] = useState("");
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>());
@@ -397,6 +398,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     setRemoteStream(null);
     setRemoteSessionRequest(null);
     setRemoteSessionId(current => current === sessionId ? "" : current);
+    setRemoteSessionPeerId("");
     setRemoteSessionStatus("");
   }, []);
 
@@ -531,6 +533,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       const peer = new RTCPeerConnection({ iceServers });
       peerConnectionsRef.current.set(sessionId, peer);
       setRemoteSessionId(sessionId);
+      setRemoteSessionPeerId(selectedDevice);
       setRemoteSessionStatus("Calling device · waiting for approval");
       peer.ontrack = event => {
         const stream = event.streams?.[0];
@@ -599,6 +602,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       await sendRtcSignal(request.fromDeviceId, request.sessionId, "ANSWER", { sdp: peer.localDescription?.sdp || "" });
       setRemoteSessionRequest(null);
       setRemoteSessionId(request.sessionId);
+      setRemoteSessionPeerId(request.fromDeviceId);
       setRemoteSessionStatus("Sharing ADVIS tab · connected when controller joins");
       addActivity("SCREEN SHARE APPROVED", "You approved a live session. Stop sharing from this panel at any time.");
     } catch (e: any) {
@@ -625,7 +629,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const stopRemoteSession = async () => {
     const sessionId = remoteSessionId;
     if (!sessionId) return;
-    const targetId = remoteSessionRequest?.fromDeviceId || selectedDevice;
+    const targetId = remoteSessionPeerId;
     if (targetId && !targetId.startsWith("tab:")) {
       await sendRtcSignal(targetId, sessionId, "END").catch(() => {});
     }
@@ -833,7 +837,11 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               <button onClick={() => navigator.clipboard.writeText(inviteLink)} className="flex gap-2 items-center text-[10px] border border-cyan-400/30 rounded px-3 py-1.5 hover:bg-cyan-500/10"><Copy size={13}/> COPY LINK</button>
             </div>
             <p className="text-[11px] text-cyan-100/60 break-all">{inviteLink}</p>
-            <p className="text-[10px] text-amber-300/80">Treat this invitation like a private key. Anyone who has it can join this network. Disconnect a device you no longer trust.</p>
+            <p className="text-[10px] text-amber-300/80">This is a private pairing link. Only share it with devices you trust.</p>
+            <div className="border-t border-cyan-500/15 pt-3 flex flex-col sm:flex-row gap-2">
+              <input value={inviteInput} onChange={event => setInviteInput(event.target.value)} placeholder="Move this device to another trusted network" className="flex-1 min-w-0 bg-slate-950 border border-cyan-500/25 rounded p-2 text-[10px] outline-none focus:border-cyan-300"/>
+              <button disabled={busy || !inviteInput.trim()} onClick={() => joinNetwork(inviteInput)} className="border border-cyan-400/30 rounded px-3 py-2 text-[10px] disabled:opacity-40">JOIN OTHER NETWORK</button>
+            </div>
             <div className="flex justify-between items-center text-[10px] text-cyan-500/60">
               <span>LAST SYNC: {lastSync ? new Date(lastSync).toLocaleTimeString() : "SYNCING..."}</span>
               <button onClick={disconnect} className="text-red-300 hover:text-red-200">DISCONNECT THIS DEVICE</button>
@@ -891,20 +899,22 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               {remoteSessionStatus && <div className="text-[10px] text-cyan-200 border border-cyan-500/20 rounded-lg p-2">{remoteSessionStatus}</div>}
               {remoteStream && (
                 <div className="border border-cyan-400/40 rounded-xl overflow-hidden">
-                  <video ref={remoteVideoRef} autoPlay playsInline muted className="w-full max-h-[55vh] bg-black object-contain"/>
-                  <div
-                    tabIndex={0}
-                    onPointerMove={event => sendRemotePointer(event, "pointer")}
-                    onPointerUp={event => sendRemotePointer(event, "click")}
-                    onKeyDown={sendRemoteKey}
-                    onWheel={event => {
-                      const channel = controlChannelsRef.current.get(remoteSessionId);
-                      if (channel?.readyState === "open") channel.send(JSON.stringify({ kind: "scroll", x: event.deltaX, y: event.deltaY }));
-                    }}
-                    className="absolute inset-0 z-10 cursor-crosshair outline-none"
-                    style={{ touchAction: "none" }}
-                    aria-label="Remote ADVIS tab control surface"
-                  />
+                  <div className="relative">
+                    <video ref={remoteVideoRef} autoPlay playsInline muted className="w-full max-h-[55vh] bg-black object-contain"/>
+                    <div
+                      tabIndex={0}
+                      onPointerMove={event => sendRemotePointer(event, "pointer")}
+                      onPointerUp={event => sendRemotePointer(event, "click")}
+                      onKeyDown={sendRemoteKey}
+                      onWheel={event => {
+                        const channel = controlChannelsRef.current.get(remoteSessionId);
+                        if (channel?.readyState === "open") channel.send(JSON.stringify({ kind: "scroll", x: event.deltaX, y: event.deltaY }));
+                      }}
+                      className="absolute inset-0 z-10 cursor-crosshair outline-none"
+                      style={{ touchAction: "none" }}
+                      aria-label="Remote ADVIS tab control surface"
+                    />
+                  </div>
                   <button onClick={stopRemoteSession} className="w-full flex items-center justify-center gap-2 bg-red-950/60 border-t border-red-400/30 p-2 text-xs text-red-200"><Square size={13}/> STOP REMOTE SESSION</button>
                 </div>
               )}
