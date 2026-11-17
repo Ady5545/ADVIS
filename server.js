@@ -199,6 +199,18 @@ async function createApp() {
   // Devices poll for commands; no long-lived WebSocket server is required.
   const networkStore = firebaseMemoryStore;
 
+  async function enforceNetworkRateLimit(res, networkId, deviceId, action, limit, windowMs) {
+    const result = await networkStore.consumeNetworkRateLimit(networkId, deviceId, action, limit, windowMs);
+    if (result.allowed) return true;
+    const retryAfterSeconds = Math.max(1, Math.ceil(Number(result.retryAfterMs || 1000) / 1000));
+    res.set("Retry-After", String(retryAfterSeconds));
+    res.status(429).json({
+      error: "Too many " + String(action).replace(/_/g, " ") + " requests. Please wait before trying again.",
+      retryAfterSeconds
+    });
+    return false;
+  }
+
   // Non-secret diagnostic. This checks the actual OAuth + Firestore read path,
   // not just whether a JavaScript adapter with expected methods was constructed.
   app.get("/api/network/status", async (_req, res) => {
@@ -206,7 +218,7 @@ async function createApp() {
       "getNetwork", "createNetwork", "getNetworkDevice", "setNetworkDevice",
       "listNetworkDevices", "createNetworkCommand", "getNetworkCommand",
       "listNetworkCommands", "createNetworkInvite", "consumeNetworkInvite",
-      "deleteNetworkDevice", "getNetworkSession", "createNetworkSession", "updateNetworkSession", "listNetworkSessions", "checkConnection"
+      "deleteNetworkDevice", "consumeNetworkRateLimit", "getNetworkSession", "createNetworkSession", "updateNetworkSession", "listNetworkSessions", "checkConnection"
     ];
     const adapterReady = Boolean(networkStore && requiredMethods.every(method =>
       typeof networkStore[method] === "function"
@@ -319,6 +331,7 @@ async function createApp() {
       if (!safeNetworkId(networkId) || !safeDeviceId(deviceId)) {
         return res.status(400).json({ error: "A valid network and device identity are required." });
       }
+      if (!await enforceNetworkRateLimit(res, networkId, deviceId, "create_network", 3, 10 * 60_000)) return;
       const ownerToken = createNetworkToken();
       const deviceToken = createNetworkToken();
       const now = Date.now();
@@ -356,6 +369,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkOwner(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "create_invite", 5, 10 * 60_000)) return;
       const code = createInvitationCode();
       const invite = {
         id: hashNetworkSecret(code),
@@ -381,6 +395,7 @@ async function createApp() {
       if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || String(invitationCode || "").length < 24) {
         return res.status(400).json({ error: "A valid one-time invitation and device identity are required." });
       }
+      if (!await enforceNetworkRateLimit(res, networkId, deviceId, "join_network", 10, 10 * 60_000)) return;
       const network = await networkStore.getNetwork(networkId);
       if (!network || !network.ownerTokenHash) {
         return res.status(403).json({ error: "This network uses the legacy invitation format. Create a new trusted network to enable one-time enrollment and owner controls." });
@@ -413,6 +428,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkOwner(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "revoke_device", 10, 10 * 60_000)) return;
       const targetDeviceId = String(req.params.targetDeviceId || "");
       if (!safeDeviceId(targetDeviceId) || targetDeviceId === auth.deviceId) {
         return res.status(400).json({ error: "Choose another enrolled device. Transfer ownership before removing the owner device." });
@@ -431,6 +447,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkOwner(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "revoke_all", 2, 10 * 60_000)) return;
       const devices = await networkStore.listNetworkDevices(auth.networkId);
       const targets = devices.filter(device => device.id !== auth.deviceId);
       for (const device of targets) {
@@ -447,6 +464,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "heartbeat", 90, 60_000)) return;
       const nextDevice = {
         ...auth.device,
         name: String(req.body.name || auth.device.name || "ADVIS Device").slice(0, 64),
@@ -512,6 +530,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "send_command", 90, 60_000)) return;
       const { targetDeviceId, kind, payload, correlationId } = req.body || {};
       if (!safeDeviceId(targetDeviceId) || !["PROMPT", "CONTROL", "PROMPT_REPLY", "RTC_SIGNAL"].includes(kind)) {
         return res.status(400).json({ error: "Unsupported device command." });
