@@ -208,7 +208,8 @@ function createFirebaseMemoryStore() {
     saveState,
     deleteMemory: id => deleteDocument(memoryCollection + "/" + safeDocumentId(id)),
     deleteProject: id => deleteDocument(projectCollection + "/" + safeDocumentId(id)),
-    getNetwork,\n    createNetwork,\n    getNetworkDevice,\n    setNetworkDevice,\n    listNetworkDevices,\n    createNetworkCommand,\n    getNetworkCommand,\n    listNetworkCommands
+    getNetwork,
+    createNetwork,\n    getNetworkDevice,\n    setNetworkDevice,\n    listNetworkDevices,\n    createNetworkCommand,\n    getNetworkCommand,\n    listNetworkCommands
   };
 }
 
