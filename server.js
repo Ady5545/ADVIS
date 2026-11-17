@@ -496,103 +496,99 @@ User Message: "${userMessage}"
 
 
 
-  // --- ADVIS MEMORY SERVICE ---
-  const { v4: uuidv4 } = require('crypto');
-  
+  // --- ADVIS PRIVATE MEMORY AND PROJECT SERVICE ---
   app.get("/api/memory", (req, res) => {
-    const { projectId } = req.query;
-    if (projectId) {
-      res.json(advisMemories.filter(m => m.projectId === projectId));
-    } else {
-      res.json(advisMemories);
-    }
+    const projectId = req.query.projectId;
+    const records = projectId ? advisMemories.filter(m => m.projectId === projectId) : advisMemories;
+    res.json(records);
   });
 
-  app.post("/api/memory", (req, res) => {
+  app.post("/api/memory", async (req, res) => {
     const { category, content, source, importance, tags, projectId, pinned, metadata } = req.body;
+    if (!String(content || "").trim()) return res.status(400).json({ error: "Memory content is required." });
     const newMemory = {
-      id: "mem_" + Date.now() + "_" + Math.floor(Math.random()*1000),
-      category: category || 'PERSONAL',
-      content,
-      source: source || 'USER',
+      id: "mem_" + Date.now() + "_" + crypto.randomBytes(5).toString("hex"),
+      category: category || "PERSONAL",
+      content: String(content).trim(),
+      source: source || "USER",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      importance: importance || 5,
-      tags: tags || [],
+      importance: Math.max(1, Math.min(10, Number(importance) || 5)),
+      tags: Array.isArray(tags) ? tags : [],
       projectId: projectId || null,
-      pinned: pinned || false,
+      pinned: !!pinned,
       metadata: metadata || {}
     };
     advisMemories.push(newMemory);
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Memory could not be saved to Firebase." }); }
     res.json(newMemory);
   });
 
-  app.put("/api/memory/:id", (req, res) => {
+  app.put("/api/memory/:id", async (req, res) => {
     const memIdx = advisMemories.findIndex(m => m.id === req.params.id);
-    if (memIdx === -1) return res.status(404).json({error: "Not found"});
+    if (memIdx === -1) return res.status(404).json({ error: "Not found" });
     const updated = { ...advisMemories[memIdx], ...req.body, updatedAt: Date.now() };
     advisMemories[memIdx] = updated;
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Memory update could not be saved to Firebase." }); }
     res.json(updated);
   });
 
-  app.delete("/api/memory/:id", (req, res) => {
+  app.delete("/api/memory/:id", async (req, res) => {
     advisMemories = advisMemories.filter(m => m.id !== req.params.id);
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Memory deletion could not be saved to Firebase." }); }
     res.json({ success: true });
   });
 
   app.get("/api/memory/search", (req, res) => {
-    const q = (req.query.q || '').toLowerCase();
-    const pid = req.query.projectId;
-    let results = advisMemories.filter(m => m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
-    if (pid) results = results.filter(m => m.projectId === pid);
+    const q = String(req.query.q || "").toLowerCase();
+    const projectId = req.query.projectId;
+    let results = advisMemories.filter(m =>
+      String(m.content || "").toLowerCase().includes(q) ||
+      (Array.isArray(m.tags) && m.tags.some(tag => String(tag).toLowerCase().includes(q)))
+    );
+    if (projectId) results = results.filter(m => m.projectId === projectId);
     res.json(results);
   });
 
-  app.get("/api/projects", (req, res) => {
-    res.json(advisProjects);
-  });
+  app.get("/api/projects", (_req, res) => res.json(advisProjects));
 
-  app.post("/api/projects", (req, res) => {
+  app.post("/api/projects", async (req, res) => {
     const { name, description, status, tags } = req.body;
+    if (!String(name || "").trim()) return res.status(400).json({ error: "Project name is required." });
     const newProject = {
-      id: "proj_" + Date.now() + "_" + Math.floor(Math.random()*1000),
-      name,
-      description,
-      status: status || 'ACTIVE',
+      id: "proj_" + Date.now() + "_" + crypto.randomBytes(5).toString("hex"),
+      name: String(name).trim(),
+      description: description || "",
+      status: status || "ACTIVE",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      tags: tags || [],
+      tags: Array.isArray(tags) ? tags : [],
       associatedMemories: []
     };
     advisProjects.push(newProject);
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Project could not be saved to Firebase." }); }
     res.json(newProject);
   });
 
-  app.put("/api/projects/:id", (req, res) => {
-    const pIdx = advisProjects.findIndex(p => p.id === req.params.id);
-    if (pIdx === -1) return res.status(404).json({error: "Not found"});
+  app.put("/api/projects/:id", async (req, res) => {
+    const pIdx = advisProjects.findIndex(project => project.id === req.params.id);
+    if (pIdx === -1) return res.status(404).json({ error: "Not found" });
     const updated = { ...advisProjects[pIdx], ...req.body, updatedAt: Date.now() };
     advisProjects[pIdx] = updated;
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Project update could not be saved to Firebase." }); }
     res.json(updated);
   });
 
-  app.delete("/api/projects/:id", (req, res) => {
-    advisProjects = advisProjects.filter(p => p.id !== req.params.id);
-    saveData();
+  app.delete("/api/projects/:id", async (req, res) => {
+    advisProjects = advisProjects.filter(project => project.id !== req.params.id);
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Project deletion could not be saved to Firebase." }); }
     res.json({ success: true });
   });
 
-  app.get("/api/history", (req, res) => {
-    const deviceId = req.query.deviceId || 'default';
-    res.json(chatHistories[deviceId] || []);
+  app.get("/api/history", (_req, res) => {
+    res.json(chatHistories[OWNER_HISTORY_KEY] || []);
   });
 
-  
   const responseCache = {};
 
   // AGENT KNOWLEDGE BASES
