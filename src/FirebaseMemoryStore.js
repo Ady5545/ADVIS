@@ -162,9 +162,8 @@ function createFirebaseMemoryStore() {
   async function syncCollection(collectionPath, records) {
     const normalized = (records || []).filter(Boolean);
     const desired = new Map(normalized.map(record => [safeDocumentId(record.id), record]));
-    const existing = await request(collectionPath + "?pageSize=1000");
-    const existingDocuments = existing?.documents || [];
-    const existingIds = new Set(existingDocuments.map(doc => doc.name.split("/").pop()));
+    const existingRecords = await listCollection(collectionPath);
+    const existingIds = new Set(existingRecords.map(record => safeDocumentId(record.id)));
 
     const writes = Array.from(desired.entries());
     for (let i = 0; i < writes.length; i += 8) {
@@ -191,7 +190,7 @@ function createFirebaseMemoryStore() {
     return {
       memories,
       projects,
-      history: decodeDocument(historyResult) || []
+      history: (decodeDocument(historyResult)?.messages || [])
     };
   }
 
