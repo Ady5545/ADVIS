@@ -30,11 +30,13 @@ async function withFakeFirestore(firestoreResponse, run) {
   };
   process.env.FIREBASE_SERVICE_ACCOUNT_JSON = createCredentials();
   delete process.env.FIREBASE_PROJECT_ID;
-  global.fetch = async url => {
+  global.fetch = async (url, options = {}) => {
     if (String(url).startsWith("https://oauth2.googleapis.com/token")) {
       return jsonResponse(200, { access_token: "test-access-token", expires_in: 3600 });
     }
-    if (String(url).includes("firestore.googleapis.com")) return firestoreResponse;
+    if (String(url).includes("firestore.googleapis.com")) {
+      return typeof firestoreResponse === "function" ? firestoreResponse(url, options) : firestoreResponse;
+    }
     throw new Error("Unexpected test request URL.");
   };
 
@@ -78,5 +80,68 @@ test("Firestore adapter reports unconfigured when no service account is supplied
     assert.equal(createFirebaseMemoryStore(), null);
   } finally {
     if (previous !== undefined) process.env.FIREBASE_SERVICE_ACCOUNT_JSON = previous;
+  }
+});
+
+
+test("Firestore invitations are single-use and expire", async () => {
+  const documents = new Map();
+  let version = 0;
+  const fakeFetch = async (url, options = {}) => {
+    if (String(url).startsWith("https://oauth2.googleapis.com/token")) {
+      return jsonResponse(200, { access_token: "test-access-token", expires_in: 3600 });
+    }
+    const parsed = new URL(String(url));
+    const key = parsed.pathname.split("/documents/")[1];
+    const method = options.method || "GET";
+    if (method === "GET") {
+      const found = documents.get(key);
+      return found ? jsonResponse(200, found) : jsonResponse(404, { error: { message: "Not found" } });
+    }
+    if (method === "PATCH") {
+      const current = documents.get(key);
+      if (parsed.searchParams.get("currentDocument.exists") === "false" && current) {
+        return jsonResponse(409, { error: { message: "Already exists" } });
+      }
+      const updateTime = parsed.searchParams.get("currentDocument.updateTime");
+      if (updateTime && (!current || current.updateTime !== updateTime)) {
+        return jsonResponse(409, { error: { message: "Update time precondition failed" } });
+      }
+      version += 1;
+      const next = {
+        name: key,
+        fields: JSON.parse(options.body).fields,
+        updateTime: "update-" + version
+      };
+      documents.set(key, next);
+      return jsonResponse(200, next);
+    }
+    throw new Error("Unexpected Firestore test method: " + method);
+  };
+  const previous = {
+    account: process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
+    project: process.env.FIREBASE_PROJECT_ID,
+    fetch: global.fetch
+  };
+  process.env.FIREBASE_SERVICE_ACCOUNT_JSON = createCredentials();
+  delete process.env.FIREBASE_PROJECT_ID;
+  global.fetch = fakeFetch;
+  try {
+    const store = createFirebaseMemoryStore();
+    const now = Date.now();
+    const invite = { id: "a".repeat(64), createdAt: now, expiresAt: now + 60_000, usedAt: null };
+    await store.createNetworkInvite("network_12345678901234567890", invite);
+    assert.equal(await store.consumeNetworkInvite("network_12345678901234567890", invite.id, now), true);
+    assert.equal(await store.consumeNetworkInvite("network_12345678901234567890", invite.id, now), false);
+
+    const expired = { id: "b".repeat(64), createdAt: now - 120_000, expiresAt: now - 60_000, usedAt: null };
+    await store.createNetworkInvite("network_12345678901234567890", expired);
+    assert.equal(await store.consumeNetworkInvite("network_12345678901234567890", expired.id, now), false);
+  } finally {
+    if (previous.account === undefined) delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    else process.env.FIREBASE_SERVICE_ACCOUNT_JSON = previous.account;
+    if (previous.project === undefined) delete process.env.FIREBASE_PROJECT_ID;
+    else process.env.FIREBASE_PROJECT_ID = previous.project;
+    global.fetch = previous.fetch;
   }
 });
