@@ -182,7 +182,7 @@ export function HologramCore({
 
     if (groupRef.current) {
       groupRef.current.position.set(curPosX, curPosY, 0);
-      groupRef.current.scale.setScalar(Math.max(0.001, activeBootP));
+      groupRef.current.scale.setScalar(Math.max(0.001, activeBootP * 1.32));
       groupRef.current.rotation.set(curRotX, curRotY, curRotZ);
     }
 
@@ -275,9 +275,9 @@ export function HologramCore({
     const targetSpatialTransition = isSpatial ? 1.0 : 0.0;
     spatialTransitionRef.current = THREE.MathUtils.lerp(spatialTransitionRef.current, targetSpatialTransition, 0.05);
     const sTrans = spatialTransitionRef.current;
-    const transScaleFactor = 1.0 - sTrans * 1.0; // shrinks to 15% size
-    const transCollapseFactor = 1.0 - sTrans * 1.0; // collapses rings/waves/shells to 5% size
-    const transOpacityFactor = 1.0 - sTrans * 1.0; // dims to 20% opacity
+    const transScaleFactor = 1.0 - sTrans * 0.82; // preserves a visible 18% core in Spatial Workspace
+    const transCollapseFactor = 1.0 - sTrans * 0.88; // contracts orbital structures without deleting them
+    const transOpacityFactor = 1.0 - sTrans * 0.76; // keeps a restrained 24% spatial afterglow
 
     if (nucleusRef.current) {
       nucleusRef.current.rotation.y -= delta * 0.5;
@@ -364,19 +364,30 @@ export function HologramCore({
   return (
     <group ref={groupRef}>
       {/* Central Nucleus */}
-      <Sphere ref={nucleusRef} args={[1.2, 24, 24]} material={materials.nucleus} />
+      <Sphere ref={nucleusRef} args={[1.42, 32, 32]} material={materials.nucleus} />
 
       {/* Inner Geometric Shell */}
-      <Icosahedron ref={innerShellRef} args={[1.6, 1]} material={materials.shell} />
+      <Icosahedron ref={innerShellRef} args={[1.9, 2]} material={materials.shell} />
       
       {/* Voice Ripples */}
       <group ref={ripplesRef}>
         {[0, 1].map((i) => (
-          <Sphere key={`ripple-${i}`} args={[2.05, 32, 32]} material={materials.ripples[i]} />
+          <Sphere key={`ripple-${i}`} args={[2.35, 40, 40]} material={materials.ripples[i]} />
         ))}
       </group>
 
-      {/* Primary Rings Removed per Tony Stark style */}
+      {/* Three restrained orbital bands restore the Core's recognisable silhouette. */}
+      <group ref={ringsRef}>
+        {ringConfigs.map((config, index) => (
+          <Torus
+            key={`core-orbit-${index}`}
+            args={[config.radius, config.tube, 8, 128]}
+            rotation={[config.rx, config.ry, config.rz]}
+          >
+            <primitive object={materials.rings[index]} attach="material" />
+          </Torus>
+        ))}
+      </group>
 
       {/* --- 3D Frequency Waveform Loops (Orthogonal Planes) --- */}
       <lineLoop ref={waveformRef1}>
