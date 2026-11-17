@@ -165,6 +165,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [remoteSessionRequest, setRemoteSessionRequest] = useState<RemoteSessionRequest | null>(null);
   const [remoteSessionStatus, setRemoteSessionStatus] = useState("");
   const [remoteSessionId, setRemoteSessionId] = useState("");
+  const [remoteSessionMode, setRemoteSessionMode] = useState<"controller" | "sharing" | "">("");
   const [remoteSessionPeerId, setRemoteSessionPeerId] = useState("");
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -399,6 +400,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     setRemoteSessionRequest(null);
     setRemoteSessionId(current => current === sessionId ? "" : current);
     setRemoteSessionPeerId("");
+    setRemoteSessionMode("");
     setRemoteSessionStatus("");
   }, []);
 
@@ -534,6 +536,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       peerConnectionsRef.current.set(sessionId, peer);
       setRemoteSessionId(sessionId);
       setRemoteSessionPeerId(selectedDevice);
+      setRemoteSessionMode("controller");
       setRemoteSessionStatus("Calling device · waiting for approval");
       peer.ontrack = event => {
         const stream = event.streams?.[0];
@@ -603,6 +606,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       setRemoteSessionRequest(null);
       setRemoteSessionId(request.sessionId);
       setRemoteSessionPeerId(request.fromDeviceId);
+      setRemoteSessionMode("sharing");
       setRemoteSessionStatus("Sharing ADVIS tab · connected when controller joins");
       addActivity("SCREEN SHARE APPROVED", "You approved a live session. Stop sharing from this panel at any time.");
     } catch (e: any) {
@@ -896,7 +900,12 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               <button onClick={sendControl} disabled={!selectedDevice || selectedDevice === deviceId} className="bg-cyan-500/15 border border-cyan-400/40 rounded p-2 text-xs disabled:opacity-40">REQUEST REMOTE ACTION</button>
               <p className="text-[10px] text-cyan-500/60">The receiving device must approve each ADVIS action before it executes.</p>
               <button onClick={startRemoteSession} disabled={!selectedDevice || selectedDevice.startsWith("tab:") || busy} className="flex items-center justify-center gap-2 bg-cyan-500/20 border border-cyan-300/50 rounded p-3 text-xs tracking-widest disabled:opacity-40"><MonitorPlay size={15}/>{busy ? "CONNECTING..." : "START LIVE REMOTE SESSION"}</button>
-              {remoteSessionStatus && <div className="text-[10px] text-cyan-200 border border-cyan-500/20 rounded-lg p-2">{remoteSessionStatus}</div>}
+              {remoteSessionStatus && (
+                <div className="flex items-center justify-between gap-2 text-[10px] text-cyan-200 border border-cyan-500/20 rounded-lg p-2">
+                  <span>{remoteSessionStatus}</span>
+                  {remoteSessionMode && <button onClick={stopRemoteSession} className="text-red-300 border border-red-400/30 rounded px-2 py-1 shrink-0">STOP {remoteSessionMode === "sharing" ? "SHARING" : "SESSION"}</button>}
+                </div>
+              )}
               {remoteStream && (
                 <div className="border border-cyan-400/40 rounded-xl overflow-hidden">
                   <div className="relative">
@@ -915,7 +924,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
                       aria-label="Remote ADVIS tab control surface"
                     />
                   </div>
-                  <button onClick={stopRemoteSession} className="w-full flex items-center justify-center gap-2 bg-red-950/60 border-t border-red-400/30 p-2 text-xs text-red-200"><Square size={13}/> STOP REMOTE SESSION</button>
+
                 </div>
               )}
             </div>
