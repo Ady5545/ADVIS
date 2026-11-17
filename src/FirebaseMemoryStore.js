@@ -220,6 +220,47 @@ function createFirebaseMemoryStore() {
     return deviceCollection(networkId) + "/" + safeDocumentId(deviceId) + "/commands";
   }
 
+  function sessionCollection(networkId) {
+    return networkDocument(networkId) + "/sessions";
+  }
+
+  async function getNetworkSession(networkId, sessionId) {
+    const result = await request(sessionCollection(networkId) + "/" + safeDocumentId(sessionId)).catch(error => {
+      if (error.status === 404) return null;
+      throw error;
+    });
+    const session = decodeDocument(result);
+    return session ? { ...session, _updateTime: result.updateTime || "" } : null;
+  }
+
+  async function createNetworkSession(networkId, session) {
+    const path = sessionCollection(networkId) + "/" + safeDocumentId(session.id);
+    await request(path + "?currentDocument.exists=false", {
+      method: "PATCH",
+      body: JSON.stringify({ fields: { payload: { stringValue: JSON.stringify(session) } } })
+    });
+    return session;
+  }
+
+  async function updateNetworkSession(networkId, session) {
+    const { _updateTime, ...storedSession } = session || {};
+    if (!_updateTime) throw new Error("Remote session update is missing its Firestore version.");
+    const path = sessionCollection(networkId) + "/" + safeDocumentId(storedSession.id);
+    const query = new URLSearchParams({
+      "updateMask.fieldPaths": "payload",
+      "currentDocument.updateTime": _updateTime
+    });
+    await request(path + "?" + query.toString(), {
+      method: "PATCH",
+      body: JSON.stringify({ fields: { payload: { stringValue: JSON.stringify(storedSession) } } })
+    });
+    return storedSession;
+  }
+
+  async function listNetworkSessions(networkId) {
+    return listCollection(sessionCollection(networkId));
+  }
+
   async function getNetwork(networkId) {
     const result = await request(networkDocument(networkId)).catch(error => {
       if (error.status === 404) return null;
@@ -353,6 +394,10 @@ function createFirebaseMemoryStore() {
     createNetworkInvite,
     consumeNetworkInvite,
     deleteNetworkDevice,
+    getNetworkSession,
+    createNetworkSession,
+    updateNetworkSession,
+    listNetworkSessions,
     checkConnection
   };
 }
