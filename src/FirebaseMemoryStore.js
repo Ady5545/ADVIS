@@ -269,6 +269,14 @@ function createFirebaseMemoryStore() {
     return listCollection(commandCollection(networkId));
   }
 
+  // A real health probe: fetch an OAuth access token and perform a harmless
+  // Firestore read. Merely checking that adapter methods exist does not prove
+  // the production service account or database is usable.
+  async function checkConnection() {
+    await request(networkCollection + "?pageSize=1");
+    return { ok: true, checkedAt: Date.now() };
+  }
+
   return {
     projectId,
     loadState,
@@ -282,7 +290,8 @@ function createFirebaseMemoryStore() {
     listNetworkDevices,
     createNetworkCommand,
     getNetworkCommand,
-    listNetworkCommands
+    listNetworkCommands,
+    checkConnection
   };
 }
 
