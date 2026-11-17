@@ -62,8 +62,15 @@ function deviceLabel() {
 }
 
 async function readJson(response: Response) {
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Network request failed.");
+  const raw = await response.text();
+  let data: any = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch (_) {}
+  if (!response.ok) {
+    throw new Error(data.error || `ADVIS API returned HTTP ${response.status}. Check the deployed API route.`);
+  }
+  if (!raw || !Object.keys(data).length) {
+    throw new Error("ADVIS API returned an empty or non-JSON response. The server route may not be deployed.");
+  }
   return data;
 }
 
@@ -175,6 +182,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState(0);
+  const [cloudNetworkStatus, setCloudNetworkStatus] = useState<{ configured: boolean; missing?: string[]; reason?: string | null } | null>(null);
   const handled = useRef(new Set<string>());
   const autoNetworkStarted = useRef(false);
 
@@ -184,6 +192,16 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     localStorage.setItem(DEVICE_KEY, deviceId);
     localStorage.setItem(NAME_KEY, deviceName);
   }, [deviceId, deviceName]);
+
+  useEffect(() => {
+    let stopped = false;
+    fetch("/api/network/status").then(readJson).then(status => {
+      if (!stopped) setCloudNetworkStatus(status);
+    }).catch(error => {
+      if (!stopped) setCloudNetworkStatus({ configured: false, reason: error.message || "The ADVIS cloud directory could not be reached." });
+    });
+    return () => { stopped = true; };
+  }, []);
 
   const authHeaders = useCallback(() => ({
     "Content-Type": "application/json",
@@ -295,7 +313,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       saveCredentials(id, secret, result.deviceToken);
       addActivity("NETWORK CREATED", "This device is the first node in your private ADVIS network.");
     } catch (e: any) {
-      setError(e.message || "Could not create the device network.");
+      setError("Network setup failed: " + (e.message || "Could not create the device network."));
     } finally {
       setBusy(false);
     }
@@ -343,7 +361,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       url.searchParams.delete("advisSecret");
       window.history.replaceState({}, "", url.toString());
     } catch (e: any) {
-      setError(e.message || "Could not join the ADVIS network.");
+      setError("Device enrollment failed: " + (e.message || "Could not join the ADVIS network."));
     } finally {
       setBusy(false);
     }
@@ -768,6 +786,14 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         <span className="text-[10px] text-cyan-500/60">Auto-saved · synced to your trusted devices</span>
       </div>
 
+      {cloudNetworkStatus && !cloudNetworkStatus.configured && (
+        <div className="p-3 rounded border border-amber-400/30 bg-amber-950/30 text-amber-100 text-xs">
+          <div className="font-semibold tracking-wider mb-1">CLOUD DEVICE DIRECTORY NOT CONFIGURED</div>
+          <p>{cloudNetworkStatus.reason || "The cloud device service is unavailable."}</p>
+          {cloudNetworkStatus.missing?.length ? <p className="mt-2 text-[10px] text-amber-200/70">Missing server settings: {cloudNetworkStatus.missing.join(", ")}</p> : null}
+          <p className="mt-2 text-[10px] text-amber-200/70">Configure these in the ADVIS Vercel project's Production Environment Variables, then redeploy. Do not paste service-account credentials into this chat.</p>
+        </div>
+      )}
       {error && <div className="p-3 rounded border border-red-400/30 bg-red-950/40 text-red-200 text-xs flex gap-2"><AlertTriangle size={16}/>{error}<button className="ml-auto" onClick={() => setError("")}><X size={14}/></button></div>}
 
       <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
