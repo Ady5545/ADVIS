@@ -86,6 +86,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState(0);
   const handled = useRef(new Set<string>());
+  const autoNetworkStarted = useRef(false);
 
 
 
@@ -197,6 +198,17 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       setBusy(false);
     }
   };
+  
+  // First device quietly creates its private cloud network. Other devices join
+  // through the owner's one-time invitation; subsequent discovery is automatic.
+  useEffect(() => {
+    if (autoNetworkStarted.current || networkId || deviceToken) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("advisNetwork") && url.searchParams.get("advisSecret")) return;
+    autoNetworkStarted.current = true;
+    void createNetwork();
+  }, [networkId, deviceToken]);
+
 
   const joinNetwork = async (rawInvite: string) => {
     setBusy(true);
@@ -443,8 +455,8 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     <div className="flex flex-col gap-5 text-cyan-100">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-cyan-300 font-bold tracking-widest">ADVIS DEVICE NETWORK</h3>
-          <p className="text-[11px] text-cyan-500/60 mt-1">Cross-device relay · private invitation · live presence</p>
+          <h3 className="text-cyan-300 font-bold tracking-widest">ADVIS GLOBAL DEVICE NETWORK</h3>
+          <p className="text-[11px] text-cyan-500/60 mt-1">Encrypted credentials · worldwide presence · consent-based control</p>
         </div>
         <span className={networkId && deviceToken ? "text-green-300 text-[10px] border border-green-400/30 bg-green-400/10 px-2 py-1 rounded" : "text-amber-300 text-[10px] border border-amber-400/30 bg-amber-400/10 px-2 py-1 rounded"}>
           {networkId && deviceToken ? "NETWORK LINKED" : "NOT CONNECTED"}
@@ -529,7 +541,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
 
           <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-cyan-300 text-xs tracking-widest">NETWORK NODES</h4>
+              <h4 className="text-cyan-300 text-xs tracking-widest">ONLINE ADVIS DEVICES</h4>
               <span className="text-[10px] text-cyan-500/60">{devices.filter(d => d.status === "ONLINE").length} ONLINE</span>
             </div>
             <div className="space-y-2">
