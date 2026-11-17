@@ -62,6 +62,9 @@ export function DeviceNetwork() {
   const [message, setMessage] = useState("");
   const [controlAction, setControlAction] = useState("DISPLAY_MODEL");
   const [modelId, setModelId] = useState("v8_engine");
+  const [spatialMode, setSpatialMode] = useState("INSPECTION");
+  const [targetView, setTargetView] = useState("home");
+  const [speakText, setSpeakText] = useState("");
   const [activity, setActivity] = useState<Array<{ id: string; title: string; detail: string; at: number }>>([]);
   const [incoming, setIncoming] = useState<IncomingControl | null>(null);
   const [error, setError] = useState("");
@@ -267,7 +270,13 @@ export function DeviceNetwork() {
     if (!selectedDevice) return;
     const payload = controlAction === "DISPLAY_MODEL"
       ? { action: controlAction, modelId }
-      : { action: controlAction };
+      : controlAction === "SET_MODE"
+        ? { action: controlAction, mode: spatialMode }
+        : controlAction === "OPEN_VIEW"
+          ? { action: controlAction, view: targetView }
+          : controlAction === "SPEAK"
+            ? { action: controlAction, text: speakText.slice(0, 500) }
+            : { action: controlAction };
     try {
       await sendCommand(selectedDevice, "CONTROL", payload);
       addActivity("CONTROL SENT", controlAction.replace(/_/g, " ") + " → " + (devices.find(d => d.id === selectedDevice)?.name || "device"));
@@ -389,6 +398,9 @@ export function DeviceNetwork() {
                 <option value="SPEAK">Speak a message</option>
               </select>
               {controlAction === "DISPLAY_MODEL" && <input value={modelId} onChange={e => setModelId(e.target.value)} placeholder="Model ID (e.g. v8_engine)" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
+              {controlAction === "SET_MODE" && <select value={spatialMode} onChange={e => setSpatialMode(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"><option>INSPECTION</option><option>SHOWCASE</option><option>DEMO</option><option>EXPLODED</option></select>}
+              {controlAction === "OPEN_VIEW" && <select value={targetView} onChange={e => setTargetView(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"><option value="home">Home</option><option value="memory">Memory</option><option value="history">History</option><option value="projects">Projects</option><option value="devices">Devices</option><option value="status">System Status</option><option value="settings">Settings</option></select>}
+              {controlAction === "SPEAK" && <input value={speakText} onChange={e => setSpeakText(e.target.value)} maxLength={500} placeholder="Text for the other device to speak" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
               <button onClick={sendControl} disabled={!selectedDevice || selectedDevice === deviceId} className="bg-cyan-500/15 border border-cyan-400/40 rounded p-2 text-xs disabled:opacity-40">REQUEST REMOTE ACTION</button>
               <p className="text-[10px] text-cyan-500/60">The receiving device must approve each control request before it executes.</p>
             </div>
