@@ -104,82 +104,6 @@ async function createApp() {
 
   let firebaseWriteChain = Promise.resolve();
 
-  function ownerPairingConfigured() {
-    return !!(
-      firebaseMemoryStore &&
-      process.env.ADVIS_OWNER_PAIRING_CODE &&
-      process.env.ADVIS_OWNER_TOKEN_SECRET &&
-      process.env.ADVIS_OWNER_TOKEN_SECRET.length >= 32
-    );
-  }
-
-  function readCookie(req, name) {
-    const cookieHeader = req.headers.cookie || "";
-    for (const part of cookieHeader.split(";")) {
-      const separator = part.indexOf("=");
-      if (separator < 0) continue;
-      if (part.slice(0, separator).trim() === name) {
-        return decodeURIComponent(part.slice(separator + 1).trim());
-      }
-    }
-    return "";
-  }
-
-  function safeStringEqual(left, right) {
-    const a = Buffer.from(String(left || ""), "utf8");
-    const b = Buffer.from(String(right || ""), "utf8");
-    return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
-  }
-
-  function issueOwnerToken() {
-    const payload = Buffer.from(JSON.stringify({
-      version: 1,
-      owner: OWNER_HISTORY_KEY,
-      expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
-    })).toString("base64url");
-    const signature = crypto.createHmac("sha256", process.env.ADVIS_OWNER_TOKEN_SECRET)
-      .update(payload).digest("base64url");
-    return payload + "." + signature;
-  }
-
-  function hasOwnerAccess(req) {
-    if (isLocalDevelopment) return true;
-    if (!ownerPairingConfigured()) return false;
-    const token = readCookie(req, "advis_owner");
-    const separator = token.lastIndexOf(".");
-    if (separator <= 0) return false;
-    const payload = token.slice(0, separator);
-    const suppliedSignature = token.slice(separator + 1);
-    const expectedSignature = crypto.createHmac("sha256", process.env.ADVIS_OWNER_TOKEN_SECRET)
-      .update(payload).digest("base64url");
-    if (!safeStringEqual(suppliedSignature, expectedSignature)) return false;
-    try {
-      const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-      return decoded.version === 1 &&
-        decoded.owner === OWNER_HISTORY_KEY &&
-        Number(decoded.expiresAt) > Date.now();
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function requireOwnerDevice(req, res, next) {
-    if (isLocalDevelopment) return next();
-    if (!ownerPairingConfigured()) {
-      return res.status(503).json({
-        error: "ADVIS private cloud memory is not configured yet.",
-        status: firebaseSetupError ? "firebase_configuration_error" : "owner_pairing_not_configured"
-      });
-    }
-    if (!hasOwnerAccess(req)) {
-      return res.status(401).json({
-        error: "This device has not been paired with the private ADVIS core.",
-        status: "device_pairing_required"
-      });
-    }
-    next();
-  }
-
   async function loadCloudState() {
     if (!firebaseMemoryStore) return false;
     const remote = await firebaseMemoryStore.loadState();
@@ -205,23 +129,17 @@ async function createApp() {
   }
 
   async function refreshCloudState(req, res, next) {
-    if (!firebaseMemoryStore) {
-      if (isLocalDevelopment) return next();
-      return res.status(503).json({
-        error: "Firebase Firestore is not connected. Add the private Firebase service-account environment variable to the ADVIS Vercel project.",
-        status: "cloud_memory_unavailable"
-      });
-    }
+    // ADVIS is intentionally open: loading the interface and using the core
+    // never depends on a browser pairing cookie or a sign-in flow. Cloud memory
+    // is an optional enhancement; if unavailable, continue with this instance's
+    // in-memory state rather than blocking the entire assistant.
+    if (!firebaseMemoryStore) return next();
     try {
       await loadCloudState();
-      next();
     } catch (error) {
-      console.error("[ADVIS Firebase] Failed to load owner state:", error);
-      res.status(503).json({
-        error: "ADVIS could not reach its private memory store.",
-        status: "cloud_memory_unavailable"
-      });
+      console.error("[ADVIS Firebase] Cloud memory unavailable; continuing without cloud sync:", error);
     }
+    return next();
   }
 
   function saveData() {
@@ -247,58 +165,9 @@ async function createApp() {
     return write;
   }
 
-  // A one-time pairing code authorizes a browser/device. There is no account
-  // list, email/password form, or recurring sign-in experience.
-  const ownerPairAttempts = new Map();
-  app.get("/api/owner/status", (req, res) => {
-    const configured = isLocalDevelopment || ownerPairingConfigured();
-    res.json({
-      configured,
-      paired: isLocalDevelopment || (configured && hasOwnerAccess(req)),
-      firebaseReady: !!firebaseMemoryStore,
-      setupError: firebaseSetupError ? "invalid_firebase_service_account" : null,
-      mode: isLocalDevelopment ? "local" : "single_owner_device_pairing"
-    });
-  });
-
-  app.post("/api/owner/pair", (req, res) => {
-    if (isLocalDevelopment) return res.json({ success: true, paired: true });
-    if (!ownerPairingConfigured()) {
-      return res.status(503).json({
-        error: "Firebase memory and owner-pairing environment variables must be configured first."
-      });
-    }
-    const clientKey = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
-    const now = Date.now();
-    const recentAttempts = (ownerPairAttempts.get(clientKey) || []).filter(timestamp => now - timestamp < 10 * 60 * 1000);
-    if (recentAttempts.length >= 8) {
-      ownerPairAttempts.set(clientKey, recentAttempts);
-      return res.status(429).json({ error: "Too many pairing attempts. Try again later." });
-    }
-    recentAttempts.push(now);
-    ownerPairAttempts.set(clientKey, recentAttempts);
-
-    const suppliedCode = String(req.body?.pairingCode || "");
-    if (!safeStringEqual(suppliedCode, process.env.ADVIS_OWNER_PAIRING_CODE)) {
-      return res.status(401).json({ error: "That device pairing code is not valid." });
-    }
-    ownerPairAttempts.delete(clientKey);
-    const token = issueOwnerToken();
-    res.setHeader("Set-Cookie",
-      "advis_owner=" + encodeURIComponent(token) +
-      "; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Strict");
-    return res.json({ success: true, paired: true });
-  });
-
-  app.post("/api/owner/unpair", (req, res) => {
-    res.setHeader("Set-Cookie", "advis_owner=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict");
-    res.json({ success: true, paired: false });
-  });
-
-  // Personal data and conversations always resolve to the same private owner.
-  app.use(["/api/memory", "/api/projects", "/api/history", "/api/advis", "/api/jarvis"],
-    requireOwnerDevice, refreshCloudState);
-
+  // Direct-access mode: no browser pairing, account, sign-in, or owner cookie.
+  // Firebase is used for shared persistence when configured, but never gates access.
+  app.use(["/api/memory", "/api/projects", "/api/history", "/api/advis", "/api/jarvis"], refreshCloudState);
 
 
   let aiInstance = null;
