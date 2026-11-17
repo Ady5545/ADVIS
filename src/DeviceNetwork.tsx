@@ -8,6 +8,7 @@ type Device = {
   lastSeen: number;
   status: "ONLINE" | "OFFLINE";
   current?: boolean;
+  role?: "OWNER" | "MEMBER";
 };
 
 type IncomingControl = {
