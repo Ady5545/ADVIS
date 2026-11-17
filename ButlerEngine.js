@@ -85,7 +85,7 @@ function resolveContextualReferences(message, butlerContext) {
  */
 function buildContextSummary(butlerContext, resolvedRef, advisMemories, advisProjects) {
   const ctx = butlerContext || {};
-  const recentConvo = (ctx.recentConversation || []).slice(-8);
+  const recentConvo = (ctx.recentConversation || []).slice(-16);
   const recentActions = (ctx.recentActions || []).slice(-4);
   const deviceMemories = (Array.isArray(ctx.deviceMemories) ? ctx.deviceMemories : [])
     .filter(memory => typeof memory === 'string' && memory.trim())
@@ -120,7 +120,7 @@ function buildContextSummary(butlerContext, resolvedRef, advisMemories, advisPro
   }
 
   if (recentConvo.length > 0) {
-    summary += `- Recent Conversation Context:\n${recentConvo.map(c => `  ${String(c.role || 'user').toUpperCase()}: ${String(c.content || '').slice(0, 1800)}`).join('\n')}\n`;
+    summary += `- Recent Conversation Context:\n${recentConvo.map(c => `  ${c.sourceConversationId ? `[ARCHIVE ${String(c.sourceConversationId).slice(-8)}] ` : ''}${String(c.role || 'user').toUpperCase()}: ${String(c.content || '').slice(0, 1200)}`).join('\n')}\n`;
   }
 
   if (deviceMemories.length > 0) {
