@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Link2, Radio, RefreshCw, Send, ShieldCheck, Smartphone, Monitor, X, Check, AlertTriangle } from "lucide-react";
+import { Copy, Radio, RefreshCw, Send, ShieldCheck, Smartphone, Monitor, X, Check, AlertTriangle, MonitorPlay, Pencil, Square } from "lucide-react";
 
 type Device = {
   id: string;
@@ -25,6 +25,13 @@ type LocalTab = {
   name: string;
   platform: string;
   lastSeen: number;
+};
+
+type RemoteSessionRequest = {
+  sessionId: string;
+  fromDeviceId: string;
+  fromDeviceName: string;
+  sdp: string;
 };
 
 const NETWORK_KEY = "advis_network_id";
@@ -60,6 +67,79 @@ async function readJson(response: Response) {
   return data;
 }
 
+function waitForIceGatheringComplete(pc: RTCPeerConnection) {
+  return new Promise<void>((resolve, reject) => {
+    if (pc.iceGatheringState === "complete") return resolve();
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, 9000);
+    const check = () => {
+      if (pc.iceGatheringState === "complete") {
+        cleanup();
+        resolve();
+      }
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      pc.removeEventListener("icegatheringstatechange", check);
+    };
+    pc.addEventListener("icegatheringstatechange", check);
+  });
+}
+
+function attachRemoteInputChannel(channel: RTCDataChannel) {
+  channel.onmessage = event => {
+    try {
+      const input = JSON.parse(String(event.data || "{}"));
+      if (input.kind === "pointer") {
+        const x = Math.max(0, Math.min(window.innerWidth - 1, Number(input.x) * window.innerWidth));
+        const y = Math.max(0, Math.min(window.innerHeight - 1, Number(input.y) * window.innerHeight));
+        const target = document.elementFromPoint(x, y) as HTMLElement | null;
+        if (!target) return;
+        target.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: x, clientY: y, pointerType: "mouse" }));
+        target.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y }));
+      } else if (input.kind === "click") {
+        const x = Math.max(0, Math.min(window.innerWidth - 1, Number(input.x) * window.innerWidth));
+        const y = Math.max(0, Math.min(window.innerHeight - 1, Number(input.y) * window.innerHeight));
+        const target = document.elementFromPoint(x, y) as HTMLElement | null;
+        target?.click();
+      } else if (input.kind === "scroll") {
+        window.scrollBy(Number(input.x) || 0, Number(input.y) || 0);
+      } else if (input.kind === "key") {
+        const target = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+        if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+          const key = String(input.key || "");
+          const start = target.selectionStart ?? target.value.length;
+          const end = target.selectionEnd ?? start;
+          let nextValue = target.value;
+          let nextCursor = start;
+          if (key === "Backspace") {
+            if (start === end && start > 0) nextValue = target.value.slice(0, start - 1) + target.value.slice(end);
+            else nextValue = target.value.slice(0, start) + target.value.slice(end);
+            nextCursor = Math.max(0, start - 1);
+          } else if (key === "Enter" && target instanceof HTMLTextAreaElement) {
+            nextValue = target.value.slice(0, start) + "\n" + target.value.slice(end);
+            nextCursor = start + 1;
+          } else if (key.length === 1 && !input.ctrlKey && !input.metaKey && !input.altKey) {
+            nextValue = target.value.slice(0, start) + key + target.value.slice(end);
+            nextCursor = start + key.length;
+          }
+          if (nextValue !== target.value) {
+            const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(target), "value")?.set;
+            setter?.call(target, nextValue);
+            target.setSelectionRange(nextCursor, nextCursor);
+            target.dispatchEvent(new Event("input", { bubbles: true }));
+            target.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("[ADVIS remote input] Ignored invalid input event.", error);
+    }
+  };
+}
+
 export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [networkId, setNetworkId] = useState(() => localStorage.getItem(NETWORK_KEY) || "");
   const [networkSecret, setNetworkSecret] = useState(() => localStorage.getItem(SECRET_KEY) || "");
@@ -82,6 +162,14 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [speakText, setSpeakText] = useState("");
   const [activity, setActivity] = useState<Array<{ id: string; title: string; detail: string; at: number }>>([]);
   const [incoming, setIncoming] = useState<IncomingControl | null>(null);
+  const [remoteSessionRequest, setRemoteSessionRequest] = useState<RemoteSessionRequest | null>(null);
+  const [remoteSessionStatus, setRemoteSessionStatus] = useState("");
+  const [remoteSessionId, setRemoteSessionId] = useState("");
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>());
+  const controlChannelsRef = useRef(new Map<string, RTCDataChannel>());
+  const activeShareRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState(0);
@@ -179,6 +267,18 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     setDeviceToken(token);
   }, []);
 
+  const iceServers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" }
+  ];
+  const optionalTurn = (import.meta as any).env?.VITE_ADVIS_TURN_URL;
+  if (optionalTurn) {
+    iceServers.push({
+      urls: optionalTurn,
+      username: (import.meta as any).env?.VITE_ADVIS_TURN_USERNAME || "",
+      credential: (import.meta as any).env?.VITE_ADVIS_TURN_CREDENTIAL || ""
+    });
+  }
+
   const createNetwork = async () => {
     setBusy(true);
     setError("");
@@ -199,14 +299,15 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     }
   };
   
-  // First device quietly creates its private cloud network. Other devices join
-  // through the owner's one-time invitation; subsequent discovery is automatic.
+  // Never silently create a separate network on every new installation.
+  // A new device must either create the first network or join an existing
+  // trusted network once. After enrollment, discovery is automatic worldwide.
   useEffect(() => {
-    if (autoNetworkStarted.current || networkId || deviceToken) return;
+    if (networkId || deviceToken) return;
     const url = new URL(window.location.href);
-    if (url.searchParams.get("advisNetwork") && url.searchParams.get("advisSecret")) return;
-    autoNetworkStarted.current = true;
-    void createNetwork();
+    if (url.searchParams.get("advisNetwork") && url.searchParams.get("advisSecret")) {
+      setInviteInput(window.location.href);
+    }
   }, [networkId, deviceToken]);
 
 
@@ -272,6 +373,40 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     return result;
   }, [authHeaders, networkId, deviceId]);
 
+  const sendRtcSignal = useCallback((targetDeviceId: string, sessionId: string, type: string, extra: Record<string, any> = {}) =>
+    sendCommand(targetDeviceId, "RTC_SIGNAL", { sessionId, type, ...extra }), [sendCommand]);
+
+  const closeRemotePeer = useCallback((sessionId: string) => {
+    const peer = peerConnectionsRef.current.get(sessionId);
+    if (peer) {
+      peer.ontrack = null;
+      peer.ondatachannel = null;
+      peer.onconnectionstatechange = null;
+      peer.close();
+      peerConnectionsRef.current.delete(sessionId);
+    }
+    const channel = controlChannelsRef.current.get(sessionId);
+    if (channel) {
+      try { channel.close(); } catch (_) {}
+      controlChannelsRef.current.delete(sessionId);
+    }
+    if (activeShareRef.current) {
+      activeShareRef.current.getTracks().forEach(track => track.stop());
+      activeShareRef.current = null;
+    }
+    setRemoteStream(null);
+    setRemoteSessionRequest(null);
+    setRemoteSessionId(current => current === sessionId ? "" : current);
+    setRemoteSessionStatus("");
+  }, []);
+
+  useEffect(() => {
+    const video = remoteVideoRef.current;
+    if (!video) return;
+    video.srcObject = remoteStream;
+    if (remoteStream) void video.play().catch(() => {});
+  }, [remoteStream, remoteSessionStatus]);
+
   useEffect(() => {
     if (!networkId || !deviceToken) return;
     let stopped = false;
@@ -329,6 +464,29 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
             });
             addActivity("CONTROL REQUEST", command.fromDeviceName + " requested " + String(command.payload?.action || "an action"));
             await acknowledge(command.id, "DELIVERED");
+          } else if (command.kind === "RTC_SIGNAL") {
+            const signal = command.payload || {};
+            const sessionId = String(signal.sessionId || "");
+            if (signal.type === "OFFER" && sessionId && signal.sdp) {
+              setRemoteSessionRequest({
+                sessionId,
+                fromDeviceId: command.fromDeviceId,
+                fromDeviceName: command.fromDeviceName,
+                sdp: String(signal.sdp)
+              });
+              addActivity("REMOTE SESSION REQUEST", command.fromDeviceName + " wants to view and control this ADVIS tab.");
+            } else if (signal.type === "ANSWER" && sessionId && signal.sdp) {
+              const peer = peerConnectionsRef.current.get(sessionId);
+              if (peer && !peer.remoteDescription) {
+                await peer.setRemoteDescription({ type: "answer", sdp: String(signal.sdp) });
+                setRemoteSessionStatus("Connected · live ADVIS tab");
+                addActivity("REMOTE SESSION CONNECTED", "Secure peer connection established.");
+              }
+            } else if (signal.type === "END" && sessionId) {
+              closeRemotePeer(sessionId);
+              addActivity("REMOTE SESSION ENDED", "The other device ended the session.");
+            }
+            await acknowledge(command.id, "COMPLETED", "Remote signal processed.");
           }
         }
       } catch (e: any) {
@@ -338,7 +496,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     sync();
     const timer = window.setInterval(sync, 3000);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [networkId, deviceToken, deviceId, deviceName, selectedDevice, authHeaders, sendCommand, acknowledge, addActivity]);
+  }, [networkId, deviceToken, deviceId, deviceName, selectedDevice, authHeaders, sendCommand, acknowledge, addActivity, closeRemotePeer]);
 
   const inviteLink = useMemo(() => {
     if (!networkId || !networkSecret) return "";
@@ -358,6 +516,139 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       addActivity("MESSAGE SENT", "Sent to " + (devices.find(d => d.id === selectedDevice)?.name || "ADVIS device"));
     } catch (e: any) {
       setError(e.message || "Message could not be sent.");
+    }
+  };
+
+  const startRemoteSession = async () => {
+    if (!selectedDevice || selectedDevice.startsWith("tab:")) {
+      setError("Select an online device in your trusted ADVIS network.");
+      return;
+    }
+    const sessionId = "sess_" + randomId();
+    setBusy(true);
+    setError("");
+    try {
+      const peer = new RTCPeerConnection({ iceServers });
+      peerConnectionsRef.current.set(sessionId, peer);
+      setRemoteSessionId(sessionId);
+      setRemoteSessionStatus("Calling device · waiting for approval");
+      peer.ontrack = event => {
+        const stream = event.streams?.[0];
+        if (stream) {
+          setRemoteStream(stream);
+          setRemoteSessionStatus("LIVE · ADVIS tab connected");
+        }
+      };
+      peer.onconnectionstatechange = () => {
+        if (peer.connectionState === "failed") {
+          setRemoteSessionStatus("Connection failed · network relay may be required");
+          addActivity("REMOTE SESSION FAILED", "A direct browser connection could not be established.");
+        } else if (peer.connectionState === "disconnected") {
+          setRemoteSessionStatus("Connection interrupted");
+        }
+      };
+      const channel = peer.createDataChannel("advis-remote-input");
+      controlChannelsRef.current.set(sessionId, channel);
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      await waitForIceGatheringComplete(peer);
+      await sendRtcSignal(selectedDevice, sessionId, "OFFER", { sdp: peer.localDescription?.sdp || "" });
+      addActivity("REMOTE SESSION REQUESTED", "Waiting for " + (devices.find(item => item.id === selectedDevice)?.name || "the selected device") + " to approve screen sharing.");
+    } catch (e: any) {
+      closeRemotePeer(sessionId);
+      setError(e.message || "Could not start the remote session.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approveRemoteSession = async () => {
+    if (!remoteSessionRequest) return;
+    const request = remoteSessionRequest;
+    setBusy(true);
+    setError("");
+    try {
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        throw new Error("This browser cannot share a screen. Open ADVIS in a current browser over HTTPS.");
+      }
+      // The user must choose the ADVIS tab in the browser's native screen-share prompt.
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      activeShareRef.current = stream;
+      const peer = new RTCPeerConnection({ iceServers });
+      peerConnectionsRef.current.set(request.sessionId, peer);
+      stream.getTracks().forEach(track => {
+        peer.addTrack(track, stream);
+        track.addEventListener("ended", () => {
+          void sendRtcSignal(request.fromDeviceId, request.sessionId, "END");
+          closeRemotePeer(request.sessionId);
+        }, { once: true });
+      });
+      peer.ondatachannel = event => {
+        controlChannelsRef.current.set(request.sessionId, event.channel);
+        attachRemoteInputChannel(event.channel);
+      };
+      peer.onconnectionstatechange = () => {
+        if (peer.connectionState === "failed" || peer.connectionState === "closed") {
+          closeRemotePeer(request.sessionId);
+        }
+      };
+      await peer.setRemoteDescription({ type: "offer", sdp: request.sdp });
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      await waitForIceGatheringComplete(peer);
+      await sendRtcSignal(request.fromDeviceId, request.sessionId, "ANSWER", { sdp: peer.localDescription?.sdp || "" });
+      setRemoteSessionRequest(null);
+      setRemoteSessionId(request.sessionId);
+      setRemoteSessionStatus("Sharing ADVIS tab · connected when controller joins");
+      addActivity("SCREEN SHARE APPROVED", "You approved a live session. Stop sharing from this panel at any time.");
+    } catch (e: any) {
+      if (activeShareRef.current) {
+        activeShareRef.current.getTracks().forEach(track => track.stop());
+        activeShareRef.current = null;
+      }
+      await sendRtcSignal(request.fromDeviceId, request.sessionId, "END").catch(() => {});
+      setError(e.message || "Screen sharing was not started.");
+      setRemoteSessionRequest(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rejectRemoteSession = async () => {
+    if (!remoteSessionRequest) return;
+    const request = remoteSessionRequest;
+    await sendRtcSignal(request.fromDeviceId, request.sessionId, "END", { reason: "Rejected on target device." }).catch(() => {});
+    setRemoteSessionRequest(null);
+    addActivity("REMOTE SESSION REJECTED", request.fromDeviceName);
+  };
+
+  const stopRemoteSession = async () => {
+    const sessionId = remoteSessionId;
+    if (!sessionId) return;
+    const targetId = remoteSessionRequest?.fromDeviceId || selectedDevice;
+    if (targetId && !targetId.startsWith("tab:")) {
+      await sendRtcSignal(targetId, sessionId, "END").catch(() => {});
+    }
+    closeRemotePeer(sessionId);
+    addActivity("REMOTE SESSION STOPPED", "This ADVIS tab ended the remote session.");
+  };
+
+  const sendRemotePointer = (event: React.PointerEvent<HTMLDivElement>, kind: "pointer" | "click") => {
+    const channel = controlChannelsRef.current.get(remoteSessionId);
+    if (!channel || channel.readyState !== "open") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+    channel.send(JSON.stringify({ kind, x, y }));
+  };
+
+  const sendRemoteKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const channel = controlChannelsRef.current.get(remoteSessionId);
+    if (!channel || channel.readyState !== "open") return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key.length === 1 || ["Backspace", "Enter"].includes(event.key)) {
+      event.preventDefault();
+      channel.send(JSON.stringify({ kind: "key", key: event.key }));
     }
   };
 
@@ -463,6 +754,12 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         </span>
       </div>
 
+      <div className="bg-black/40 border border-cyan-500/20 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-2">
+        <label className="text-[10px] tracking-widest text-cyan-400 shrink-0">THIS DEVICE NAME</label>
+        <input value={deviceName} onChange={event => setDeviceName(event.target.value.slice(0, 48))} maxLength={48} placeholder="Give this device a name" className="flex-1 min-w-0 bg-slate-950 border border-cyan-500/30 rounded-lg px-3 py-2 text-xs text-cyan-100 outline-none focus:border-cyan-300"/>
+        <span className="text-[10px] text-cyan-500/60">Auto-saved · synced to your trusted devices</span>
+      </div>
+
       {error && <div className="p-3 rounded border border-red-400/30 bg-red-950/40 text-red-200 text-xs flex gap-2"><AlertTriangle size={16}/>{error}<button className="ml-auto" onClick={() => setError("")}><X size={14}/></button></div>}
 
       <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
@@ -516,9 +813,13 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
             </>
           ) : (
             <>
-              <div className="flex items-center gap-2 text-cyan-300"><Radio size={18}/> INITIALISING GLOBAL ADVIS NETWORK</div>
-              <p className="text-xs text-cyan-100/70 leading-relaxed">This ADVIS installation creates its private cloud network automatically. Once ready, share its one-time invitation link with the family members or devices you trust. They will appear here whenever they are online.</p>
-              <button disabled={busy} onClick={createNetwork} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-2 text-xs tracking-widest disabled:opacity-40">{busy ? "INITIALISING..." : "RETRY NETWORK SETUP"}</button>
+              <div className="flex items-center gap-2 text-cyan-300"><Radio size={18}/> CONNECT THIS ADVIS DEVICE</div>
+              <p className="text-xs text-cyan-100/70 leading-relaxed">On your first device, create your private network. On each additional device, join it once with the owner's invitation. After that, every enrolled device appears automatically whenever it is online—wherever it is in the world.</p>
+              <input value={inviteInput} onChange={event => setInviteInput(event.target.value)} placeholder="Paste your trusted ADVIS invitation link here" className="bg-slate-950 border border-cyan-500/30 rounded-lg p-3 text-xs outline-none focus:border-cyan-300"/>
+              <div className="grid sm:grid-cols-2 gap-2">
+                <button disabled={busy || !inviteInput.trim()} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING..." : "JOIN MY TRUSTED NETWORK"}</button>
+                <button disabled={busy} onClick={createNetwork} className="bg-slate-900 border border-cyan-500/25 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "INITIALISING..." : "CREATE FIRST NETWORK"}</button>
+              </div>
             </>
           )}
           {error && <p className="text-[10px] text-red-300">{error}</p>}
@@ -585,10 +886,43 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               {controlAction === "OPEN_VIEW" && <select value={targetView} onChange={e => setTargetView(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"><option value="home">Home</option><option value="memory">Memory</option><option value="history">History</option><option value="projects">Projects</option><option value="devices">Devices</option><option value="status">System Status</option><option value="settings">Settings</option></select>}
               {controlAction === "SPEAK" && <input value={speakText} onChange={e => setSpeakText(e.target.value)} maxLength={500} placeholder="Text for the other device to speak" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
               <button onClick={sendControl} disabled={!selectedDevice || selectedDevice === deviceId} className="bg-cyan-500/15 border border-cyan-400/40 rounded p-2 text-xs disabled:opacity-40">REQUEST REMOTE ACTION</button>
-              <p className="text-[10px] text-cyan-500/60">The receiving device must approve each control request before it executes.</p>
+              <p className="text-[10px] text-cyan-500/60">The receiving device must approve each ADVIS action before it executes.</p>
+              <button onClick={startRemoteSession} disabled={!selectedDevice || selectedDevice.startsWith("tab:") || busy} className="flex items-center justify-center gap-2 bg-cyan-500/20 border border-cyan-300/50 rounded p-3 text-xs tracking-widest disabled:opacity-40"><MonitorPlay size={15}/>{busy ? "CONNECTING..." : "START LIVE REMOTE SESSION"}</button>
+              {remoteSessionStatus && <div className="text-[10px] text-cyan-200 border border-cyan-500/20 rounded-lg p-2">{remoteSessionStatus}</div>}
+              {remoteStream && (
+                <div className="border border-cyan-400/40 rounded-xl overflow-hidden">
+                  <video ref={remoteVideoRef} autoPlay playsInline muted className="w-full max-h-[55vh] bg-black object-contain"/>
+                  <div
+                    tabIndex={0}
+                    onPointerMove={event => sendRemotePointer(event, "pointer")}
+                    onPointerUp={event => sendRemotePointer(event, "click")}
+                    onKeyDown={sendRemoteKey}
+                    onWheel={event => {
+                      const channel = controlChannelsRef.current.get(remoteSessionId);
+                      if (channel?.readyState === "open") channel.send(JSON.stringify({ kind: "scroll", x: event.deltaX, y: event.deltaY }));
+                    }}
+                    className="absolute inset-0 z-10 cursor-crosshair outline-none"
+                    style={{ touchAction: "none" }}
+                    aria-label="Remote ADVIS tab control surface"
+                  />
+                  <button onClick={stopRemoteSession} className="w-full flex items-center justify-center gap-2 bg-red-950/60 border-t border-red-400/30 p-2 text-xs text-red-200"><Square size={13}/> STOP REMOTE SESSION</button>
+                </div>
+              )}
             </div>
           </div>
         </>
+      )}
+
+      {remoteSessionRequest && (
+        <div className="bg-amber-950/30 border border-amber-400/40 rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-2 text-amber-200"><MonitorPlay size={17}/> LIVE REMOTE SESSION REQUEST</div>
+          <p className="text-xs text-amber-100/80">{remoteSessionRequest.fromDeviceName} wants to view and interact with this ADVIS tab. You choose whether to share it.</p>
+          <p className="text-[10px] text-amber-200/60">The browser will show its own screen-sharing chooser. Select this ADVIS tab. You can stop sharing at any time.</p>
+          <div className="flex gap-2">
+            <button disabled={busy} onClick={approveRemoteSession} className="flex-1 bg-green-500/15 border border-green-400/40 rounded p-2 text-xs disabled:opacity-40"><Check size={14} className="inline mr-1"/> SHARE ADVIS TAB</button>
+            <button disabled={busy} onClick={rejectRemoteSession} className="flex-1 bg-red-500/10 border border-red-400/30 rounded p-2 text-xs disabled:opacity-40"><X size={14} className="inline mr-1"/> REJECT</button>
+          </div>
+        </div>
       )}
 
       {incoming && (
