@@ -488,9 +488,9 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (text: string, file?: {name: string, content: string, isImage?: boolean, mimeType?: string} | null) => {
+  const handleSendMessage = async (text: string, file?: {name: string, content: string, isImage?: boolean, mimeType?: string} | null): Promise<string> => {
     if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
-    if ((!text.trim() && !file) || systemState === 'THINKING' || systemState === 'SEARCHING' || systemState === 'ANALYZING') return;
+    if ((!text.trim() && !file) || systemState === 'THINKING' || systemState === 'SEARCHING' || systemState === 'ANALYZING') return "";
     
     const lowerText = text.toLowerCase().trim();
     if (lowerText === 'open engineering mode' || lowerText.includes('open engineering mode')) {
@@ -501,7 +501,7 @@ export default function App() {
         { role: 'user', content: text, timestamp: Date.now() },
         { role: 'assistant', content: 'Engineering Mode activated. Spatial telemetry and diagnostics HUD online.', timestamp: Date.now() }
       ]);
-      return;
+      return "Engineering Mode activated. Spatial telemetry and diagnostics HUD online.";
     }
     
     try {
@@ -849,6 +849,7 @@ export default function App() {
       } else {
         setTimeout(() => { setSystemState('ONLINE'); sessionActiveRef.current = true; sessionTimerRef.current = setTimeout(() => { sessionActiveRef.current = false; }, 5000); }, durationMs);
       }
+      return String(data.reply || "ADVIS completed the remote request.");
     } catch (e) {
       console.warn('handleSendMessage error:', e);
       
@@ -856,8 +857,69 @@ export default function App() {
       setSystemState('ONLINE');
 
       setTimeout(() => { setSystemState('ONLINE'); sessionActiveRef.current = false; }, 3000);
+      return "ADVIS could not process that remote request.";
     }
   };
+
+  useEffect(() => {
+    const handleRemotePrompt = async (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      const requestText = String(detail.text || "").trim();
+      if (!requestText || typeof detail.respond !== "function") return;
+      const reply = await handleSendMessage(
+        "A message from another ADVIS device (" + String(detail.fromDeviceName || "ADVIS device") + "): " + requestText
+      );
+      await detail.respond(reply || "This ADVIS instance is currently busy. Please try again shortly.");
+    };
+
+    const handleRemoteControl = (event: Event) => {
+      const action = (event as CustomEvent).detail || {};
+      if (action.action === "DISPLAY_MODEL") {
+        const modelId = String(action.modelId || "");
+        if (Object.prototype.hasOwnProperty.call(SPATIAL_LIBRARY, modelId)) {
+          setCurrentSpatialObject(modelId);
+          setActiveLearningSession(null);
+          setSelectedComponentId(null);
+          setHoveredComponentId(null);
+          changeSpatialMode("INSPECTION");
+          setCurrentView("home");
+        }
+      } else if (action.action === "CLOSE_MODEL") {
+        setCurrentSpatialObject(null);
+        setSelectedComponentId(null);
+        setHoveredComponentId(null);
+        setActiveLearningSession(null);
+        changeSpatialMode("INSPECTION");
+        setCurrentView("home");
+      } else if (action.action === "SET_MODE") {
+        const mode = String(action.mode || "").toUpperCase();
+        if (["INSPECTION", "SHOWCASE", "DEMO", "EXPLODED"].includes(mode)) {
+          changeSpatialMode(mode as SpatialMode);
+          setCurrentView("home");
+        }
+      } else if (action.action === "OPEN_VIEW") {
+        const view = String(action.view || "");
+        if (["home", "memory", "history", "projects", "devices", "status", "settings"].includes(view)) {
+          setCurrentView(view);
+        }
+      } else if (action.action === "SPEAK") {
+        const text = String(action.text || "").slice(0, 500);
+        if (text && window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = speechRate;
+          window.speechSynthesis.speak(utterance);
+        }
+      }
+    };
+
+    window.addEventListener("advis-remote-prompt", handleRemotePrompt as EventListener);
+    window.addEventListener("advis-remote-control-approved", handleRemoteControl as EventListener);
+    return () => {
+      window.removeEventListener("advis-remote-prompt", handleRemotePrompt as EventListener);
+      window.removeEventListener("advis-remote-control-approved", handleRemoteControl as EventListener);
+    };
+  }, [handleSendMessage, speechRate]);
 
   useSpeechRecognition(systemState, setSystemState, handleSendMessage, sessionActiveRef, setWakeWordEnergy);
 
