@@ -80,15 +80,22 @@ export function HologramCore({
     return arr;
   }, []);
 
+  // The personal ADVIS Core stays in its original blue JARVIS palette.
+  // System states are communicated through blue/ice-blue shades and motion,
+  // never by switching to the separate NCSC nebula palette.
   const getThemeColor = () => {
-    switch(systemState) {
-      case 'LISTENING': return '#00ffff'; 
-      case 'THINKING': return '#00aaff'; 
-      case 'SEARCHING': return '#0066ff';
-      case 'ANALYZING': return '#9933ff'; 
-      case 'SPEAKING': return '#00e5ff'; 
-      case 'ERROR': return '#ff0033'; 
-      default: return themeColor; 
+    switch (systemState) {
+      case 'BOOTING': return '#0876d1';
+      case 'CONNECTING': return '#267fc7';
+      case 'LISTENING': return '#27dfff';
+      case 'THINKING': return '#168bff';
+      case 'SEARCHING': return '#3d70ff';
+      case 'ANALYZING': return '#63b5ff';
+      case 'SPEAKING': return '#b8f5ff';
+      case 'ONLINE_ACTIVE': return '#35baff';
+      case 'OFFLINE': return '#315b88';
+      case 'ERROR': return '#6b9dce';
+      default: return themeColor;
     }
   };
 
@@ -148,7 +155,20 @@ export function HologramCore({
 
   useFrame((state, delta) => {
     const time = state.clock.getElapsedTime();
-    pulseTimeRef.current += delta * ((systemState === 'THINKING' || systemState === 'ANALYZING' || systemState === 'SEARCHING') ? 4 : 1.5);
+    const pulseRate =
+      systemState === 'SEARCHING' ? 5.0 :
+      systemState === 'THINKING' ? 4.2 :
+      systemState === 'ANALYZING' ? 3.6 :
+      systemState === 'LISTENING' ? 2.4 :
+      systemState === 'SPEAKING' ? 2.8 :
+      systemState === 'CONNECTING' ? 1.9 :
+      systemState === 'BOOTING' ? 1.1 :
+      systemState === 'OFFLINE' ? 0.35 :
+      systemState === 'ERROR' ? 2.1 : 1.35;
+    pulseTimeRef.current += delta * pulseRate;
+
+    // Offline is intentionally subdued rather than appearing broken or vanishing.
+    const stateVisibility = systemState === 'OFFLINE' ? 0.42 : 1;
     
     // Boot sequence animation
     if (systemState === 'BOOTING') {
@@ -204,8 +224,8 @@ export function HologramCore({
       idleTreble = 0;
     } else {
       // Gentle idle hum
-      idleBass = (Math.sin(time * 1.5) * 0.05 + 0.05);
-      idleTreble = (Math.sin(time * 4.0) * 0.02 + 0.02);
+      idleBass = systemState === 'OFFLINE' ? 0.004 : (Math.sin(time * 1.5) * 0.05 + 0.05);
+      idleTreble = systemState === 'OFFLINE' ? 0.002 : (Math.sin(time * 4.0) * 0.02 + 0.02);
     }
 
     const curBass = Math.max(idleBass, smoothedBassRef.current + momentumEnergy * 0.6);
@@ -290,7 +310,7 @@ export function HologramCore({
       if (systemState === 'SPEAKING' || systemState === 'LISTENING') {
         materials.nucleus.opacity = Math.min(1, (systemState === 'LISTENING' ? 0.75 : 0.6) + (curBass * 0.5)) * bootP * transOpacityFactor;
       } else {
-        materials.nucleus.opacity = (0.7 + Math.sin(pulseTimeRef.current) * 0.1) * bootP * transOpacityFactor;
+        materials.nucleus.opacity = (0.7 + Math.sin(pulseTimeRef.current) * 0.1) * bootP * transOpacityFactor * stateVisibility;
       }
     }
 
@@ -300,7 +320,7 @@ export function HologramCore({
       
       const shellScale = (1.0 + curTreble * 0.25) * transCollapseFactor;
       innerShellRef.current.scale.setScalar(shellScale);
-      materials.shell.opacity = (0.25 + curTreble * 0.2 + momentumEnergy * 0.3) * bootP * transOpacityFactor;
+      materials.shell.opacity = (0.25 + curTreble * 0.2 + momentumEnergy * 0.3) * bootP * transOpacityFactor * stateVisibility;
     }
 
     if (ringsRef.current) {
@@ -311,9 +331,9 @@ export function HologramCore({
         ring.rotation.z += delta * speedMult * (i % 2 === 0 ? 0.4 : -0.4);
         const baseOpacity = i % 2 === 0 ? 0.5 : 0.25;
         if (systemState === 'SPEAKING' || systemState === 'LISTENING') {
-          materials.rings[i].opacity = Math.min(1, baseOpacity + (curBass * 0.6)) * Math.max(0, (bootP - 0.6) / 0.4) * transOpacityFactor;
+          materials.rings[i].opacity = Math.min(1, baseOpacity + (curBass * 0.6)) * Math.max(0, (bootP - 0.6) / 0.4) * transOpacityFactor * stateVisibility;
         } else {
-          materials.rings[i].opacity = baseOpacity * Math.max(0, (bootP - 0.6) / 0.4) * transOpacityFactor;
+          materials.rings[i].opacity = baseOpacity * Math.max(0, (bootP - 0.6) / 0.4) * transOpacityFactor * stateVisibility;
         }
       });
     }
@@ -327,14 +347,14 @@ export function HologramCore({
           const scale = 1 + (rippleCycle * 0.3) + curBass * 0.2;
           ripple.scale.set(scale, scale, scale);
           const fadeOut = Math.max(0, 1 - (rippleCycle / 2.5)); 
-          materials.ripples[i].opacity = fadeOut * (audioLevel * 0.8) * bootP * transOpacityFactor;
+          materials.ripples[i].opacity = fadeOut * (audioLevel * 0.8) * bootP * transOpacityFactor * stateVisibility;
         } else if (systemState === 'LISTENING') {
           const offset = i * 1.5;
           const rippleCycle = (time * 1.0 + offset) % 4.0;
           const scale = 1 + (rippleCycle * 0.15) + curBass * 0.15;
           ripple.scale.set(scale, scale, scale);
           const fadeOut = Math.max(0, 1 - (rippleCycle / 4.0)); 
-          materials.ripples[i].opacity = fadeOut * 0.2 * bootP * transOpacityFactor;
+          materials.ripples[i].opacity = fadeOut * 0.2 * bootP * transOpacityFactor * stateVisibility;
         } else {
           ripple.scale.set(1, 1, 1);
           materials.ripples[i].opacity += (0 - materials.ripples[i].opacity) * 0.15;
@@ -352,7 +372,7 @@ export function HologramCore({
       } else {
         mat.size += (0.04 - mat.size) * 0.1;
       }
-      mat.opacity = (0.6 + curTreble * 0.4) * Math.max(0, (bootP - 0.7) / 0.3) * transOpacityFactor;
+      mat.opacity = (0.6 + curTreble * 0.4) * Math.max(0, (bootP - 0.7) / 0.3) * transOpacityFactor * stateVisibility;
     }
 
     // Collapse orthogonal wave loops
