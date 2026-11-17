@@ -6,6 +6,8 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const { processButlerTurn } = require("./ButlerEngine");
+const crypto = require("crypto");
+const { createFirebaseMemoryStore } = require("./src/FirebaseMemoryStore");
 
 async function createApp() {
   const app = express();
@@ -89,6 +91,139 @@ async function createApp() {
     console.error("Failed to load data:", e);
   }
 
+  const OWNER_HISTORY_KEY = "primary";
+  const isLocalDevelopment = !process.env.VERCEL && process.env.NODE_ENV !== "production";
+  let firebaseMemoryStore = null;
+  let firebaseSetupError = null;
+  try {
+    firebaseMemoryStore = createFirebaseMemoryStore();
+  } catch (error) {
+    firebaseSetupError = error;
+    console.error("[ADVIS Firebase] Configuration error:", error.message);
+  }
+
+  let firebaseWriteChain = Promise.resolve();
+
+  function ownerPairingConfigured() {
+    return !!(
+      firebaseMemoryStore &&
+      process.env.ADVIS_OWNER_PAIRING_CODE &&
+      process.env.ADVIS_OWNER_TOKEN_SECRET &&
+      process.env.ADVIS_OWNER_TOKEN_SECRET.length >= 32
+    );
+  }
+
+  function readCookie(req, name) {
+    const cookieHeader = req.headers.cookie || "";
+    for (const part of cookieHeader.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator < 0) continue;
+      if (part.slice(0, separator).trim() === name) {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      }
+    }
+    return "";
+  }
+
+  function safeStringEqual(left, right) {
+    const a = Buffer.from(String(left || ""), "utf8");
+    const b = Buffer.from(String(right || ""), "utf8");
+    return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
+  }
+
+  function issueOwnerToken() {
+    const payload = Buffer.from(JSON.stringify({
+      version: 1,
+      owner: OWNER_HISTORY_KEY,
+      expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
+    })).toString("base64url");
+    const signature = crypto.createHmac("sha256", process.env.ADVIS_OWNER_TOKEN_SECRET)
+      .update(payload).digest("base64url");
+    return payload + "." + signature;
+  }
+
+  function hasOwnerAccess(req) {
+    if (isLocalDevelopment) return true;
+    if (!ownerPairingConfigured()) return false;
+    const token = readCookie(req, "advis_owner");
+    const separator = token.lastIndexOf(".");
+    if (separator <= 0) return false;
+    const payload = token.slice(0, separator);
+    const suppliedSignature = token.slice(separator + 1);
+    const expectedSignature = crypto.createHmac("sha256", process.env.ADVIS_OWNER_TOKEN_SECRET)
+      .update(payload).digest("base64url");
+    if (!safeStringEqual(suppliedSignature, expectedSignature)) return false;
+    try {
+      const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+      return decoded.version === 1 &&
+        decoded.owner === OWNER_HISTORY_KEY &&
+        Number(decoded.expiresAt) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function requireOwnerDevice(req, res, next) {
+    if (isLocalDevelopment) return next();
+    if (!ownerPairingConfigured()) {
+      return res.status(503).json({
+        error: "ADVIS private cloud memory is not configured yet.",
+        status: firebaseSetupError ? "firebase_configuration_error" : "owner_pairing_not_configured"
+      });
+    }
+    if (!hasOwnerAccess(req)) {
+      return res.status(401).json({
+        error: "This device has not been paired with the private ADVIS core.",
+        status: "device_pairing_required"
+      });
+    }
+    next();
+  }
+
+  async function loadCloudState() {
+    if (!firebaseMemoryStore) return false;
+    const remote = await firebaseMemoryStore.loadState();
+    const remoteHasData = remote.memories.length || remote.projects.length || remote.history.length;
+    const oldLocalHistory = Object.values(chatHistories || {}).flat()
+      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const localHasData = advisMemories.length || advisProjects.length || oldLocalHistory.length;
+
+    if (!remoteHasData && localHasData) {
+      const migratedHistory = oldLocalHistory.slice(-200);
+      await firebaseMemoryStore.saveState({
+        memories: advisMemories,
+        projects: advisProjects,
+        history: migratedHistory
+      });
+      chatHistories = { [OWNER_HISTORY_KEY]: migratedHistory };
+    } else {
+      advisMemories = remote.memories || [];
+      advisProjects = remote.projects || [];
+      chatHistories = { [OWNER_HISTORY_KEY]: (remote.history || []).slice(-200) };
+    }
+    return true;
+  }
+
+  async function refreshCloudState(req, res, next) {
+    if (!firebaseMemoryStore) {
+      if (isLocalDevelopment) return next();
+      return res.status(503).json({
+        error: "Firebase Firestore is not connected. Add the private Firebase service-account environment variable to the ADVIS Vercel project.",
+        status: "cloud_memory_unavailable"
+      });
+    }
+    try {
+      await loadCloudState();
+      next();
+    } catch (error) {
+      console.error("[ADVIS Firebase] Failed to load owner state:", error);
+      res.status(503).json({
+        error: "ADVIS could not reach its private memory store.",
+        status: "cloud_memory_unavailable"
+      });
+    }
+  }
+
   function saveData() {
     try {
       fs.writeFileSync(HISTORY_FILE, JSON.stringify(chatHistories, null, 2), "utf-8");
@@ -96,58 +231,134 @@ async function createApp() {
       fs.writeFileSync(ADVIS_MEMORIES_FILE, JSON.stringify(advisMemories, null, 2), "utf-8");
       fs.writeFileSync(ADVIS_PROJECTS_FILE, JSON.stringify(advisProjects, null, 2), "utf-8");
     } catch (e) {
-      console.error("Failed to save data:", e);
+      console.error("Failed to save local data:", e);
     }
+
+    if (!firebaseMemoryStore) return Promise.resolve();
+    const snapshot = {
+      memories: advisMemories.map(memory => ({ ...memory })),
+      projects: advisProjects.map(project => ({ ...project })),
+      history: (chatHistories[OWNER_HISTORY_KEY] || []).slice(-200)
+    };
+    const write = firebaseWriteChain.then(() => firebaseMemoryStore.saveState(snapshot));
+    firebaseWriteChain = write.catch(error => {
+      console.error("[ADVIS Firebase] Failed to persist owner state:", error);
+    });
+    return write;
   }
+
+  // A one-time pairing code authorizes a browser/device. There is no account
+  // list, email/password form, or recurring sign-in experience.
+  app.get("/api/owner/status", (req, res) => {
+    const configured = isLocalDevelopment || ownerPairingConfigured();
+    res.json({
+      configured,
+      paired: isLocalDevelopment || (configured && hasOwnerAccess(req)),
+      firebaseReady: !!firebaseMemoryStore,
+      setupError: firebaseSetupError ? "invalid_firebase_service_account" : null,
+      mode: isLocalDevelopment ? "local" : "single_owner_device_pairing"
+    });
+  });
+
+  app.post("/api/owner/pair", (req, res) => {
+    if (isLocalDevelopment) return res.json({ success: true, paired: true });
+    if (!ownerPairingConfigured()) {
+      return res.status(503).json({
+        error: "Firebase memory and owner-pairing environment variables must be configured first."
+      });
+    }
+    const suppliedCode = String(req.body?.pairingCode || "");
+    if (!safeStringEqual(suppliedCode, process.env.ADVIS_OWNER_PAIRING_CODE)) {
+      return res.status(401).json({ error: "That device pairing code is not valid." });
+    }
+    const token = issueOwnerToken();
+    res.setHeader("Set-Cookie",
+      "advis_owner=" + encodeURIComponent(token) +
+      "; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Strict");
+    return res.json({ success: true, paired: true });
+  });
+
+  app.post("/api/owner/unpair", (req, res) => {
+    res.setHeader("Set-Cookie", "advis_owner=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict");
+    res.json({ success: true, paired: false });
+  });
+
+  // Personal data and conversations always resolve to the same private owner.
+  app.use(["/api/memory", "/api/projects", "/api/history", "/api/advis", "/api/jarvis"],
+    requireOwnerDevice, refreshCloudState);
+
+
 
   let aiInstance = null;
 
   function getRelevantMemories(userMessage, activeProjectId) {
-      if (advisMemories.length === 0) return '';
-      
-      const words = userMessage.toLowerCase().split(' ').filter(w => w.length > 3);
-      
-      // Score each memory
-      const scored = advisMemories.map(m => {
-          let score = 0;
-          const memStr = (m.content + " " + m.tags.join(" ")).toLowerCase();
-          
-          // Semantic overlap
-          words.forEach(w => {
-              if (memStr.includes(w)) score += 2;
-          });
-          
-          // Project relevance
-          if (activeProjectId && m.projectId === activeProjectId) score += 3;
-          if (!activeProjectId && !m.projectId) score += 1;
-          
-          // Importance
-          score += (m.importance || 5) * 0.2;
-          
-          // Pinned
-          if (m.pinned) score += 5;
-          
-          // Recency (boost recent memories slightly)
-          const ageHours = (Date.now() - m.updatedAt) / (1000 * 60 * 60);
-          if (ageHours < 24) score += 1;
-          
-          return { memory: m, score };
-      });
-      
-      // Filter out low scores unless pinned or project exact match
-      const relevant = scored.filter(s => s.score > 2 || s.memory.pinned || (activeProjectId && s.memory.projectId === activeProjectId));
-      
-      // Sort by score descending
-      relevant.sort((a, b) => b.score - a.score);
-      
-      // Take top 10 to avoid context bloat
-      const topMemories = relevant.slice(0, 10).map(s => s.memory);
-      
-      if (topMemories.length > 0) {
-          return '\n\n[ADVIS MEMORY CONTEXT]:\n' + topMemories.map(m => `- [${m.category}] ${m.content}`).join('\n');
+    if (!advisMemories.length) return "";
+    const stopWords = new Set(["the", "and", "for", "with", "that", "this", "have", "from", "about", "into", "what", "when", "where", "your", "you", "are", "was", "were", "does", "will", "would", "could", "should", "please", "make", "want"]);
+    const words = String(userMessage || "").toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
+    const queryTokens = Array.from(new Set(words.filter(word => !stopWords.has(word))));
+    const currentProject = activeProjectId || null;
+
+    const scored = advisMemories.map(memory => {
+      const tags = Array.isArray(memory.tags) ? memory.tags : [];
+      const memoryText = (String(memory.content || "") + " " + tags.join(" ")).toLowerCase();
+      const memoryTokens = new Set(memoryText.match(/[a-z0-9_-]{3,}/g) || []);
+      let overlap = 0;
+      for (const token of queryTokens) {
+        if (memoryTokens.has(token)) overlap += 1;
+        else if (token.length >= 5 && Array.from(memoryTokens).some(candidate => candidate.includes(token) || token.includes(candidate))) overlap += 0.5;
       }
-      return '';
+
+      const ageDays = Math.max(0, (Date.now() - Number(memory.updatedAt || memory.createdAt || Date.now())) / 86400000);
+      const importance = Math.max(1, Math.min(10, Number(memory.importance || 5)));
+      let score = overlap * 3 + importance * 0.45 + (memory.pinned ? 9 : 0);
+      if (currentProject && memory.projectId === currentProject) score += 8;
+      if (!memory.projectId) score += 1.5;
+      if (ageDays < 7) score += 1.5;
+      if (["PREFERENCE", "PERSONAL", "GOAL"].includes(memory.category)) score += 1.25;
+      return { memory, score };
+    });
+
+    const pinned = scored.filter(item => item.memory.pinned);
+    const globalProfile = scored
+      .filter(item => !item.memory.projectId && ["PERSONAL", "PREFERENCE", "GOAL", "WORKSPACE"].includes(item.memory.category))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12);
+    const projectContext = currentProject
+      ? scored.filter(item => item.memory.projectId === currentProject).sort((a, b) => b.score - a.score).slice(0, 16)
+      : [];
+    const queryRelevant = scored
+      .filter(item => item.score >= 3.25)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 24);
+
+    const selected = [];
+    const seen = new Set();
+    for (const item of [...pinned, ...globalProfile, ...projectContext, ...queryRelevant]) {
+      if (seen.has(item.memory.id)) continue;
+      seen.add(item.memory.id);
+      selected.push(item.memory);
+    }
+
+    let usedChars = 0;
+    const memoryLines = [];
+    for (const memory of selected) {
+      const line = "- [" + (memory.category || "GENERAL") +
+        "; importance " + (memory.importance || 5) +
+        (memory.pinned ? "; pinned" : "") + "] " +
+        String(memory.content || "").slice(0, 900);
+      if (usedChars + line.length > 14000) continue;
+      memoryLines.push(line);
+      usedChars += line.length;
+      if (memoryLines.length >= 40) break;
+    }
+
+    if (!memoryLines.length) return "";
+    return "\n\n[ADVIS LONG-TERM OWNER MEMORY — PRIVATE CONTEXT]\n" +
+      "Use these durable facts as ongoing context across sessions and devices. Prefer current, project-specific facts over old conflicting facts. Never invent missing details.\n" +
+      memoryLines.join("\n");
   }
+
+
   function getGeminiClient() {
     if (aiInstance) return aiInstance;
     const apiKey = process.env.GEMINI_API_KEY;
@@ -253,7 +464,7 @@ User Message: "${userMessage}"
                  if (evalData.tags && evalData.tags.length > 0) {
                      advisMemories[existingIdx].tags = Array.from(new Set([...advisMemories[existingIdx].tags, ...evalData.tags]));
                  }
-                 saveData();
+                 await saveData();
                  return;
              }
          }
@@ -273,7 +484,7 @@ User Message: "${userMessage}"
            metadata: { confidence: evalData.confidence }
          };
          advisMemories.push(newMemory);
-         saveData();
+         await saveData();
          console.log("[MEMORY_EVENT] MEMORY_CREATED:", newMemory.id);
       }
 
@@ -604,7 +815,7 @@ Output JSON only, in this exact format:
            metadata: {}
          };
          advisMemories.push(newMemory);
-         saveData();
+         await saveData();
          return `I have saved that to my memory banks, Sir. (Category: ${intent.category})`;
       } 
       else if (intent.action === "DELETE") {
@@ -612,7 +823,7 @@ Output JSON only, in this exact format:
          const idx = advisMemories.findIndex(m => m.content.toLowerCase().includes(intent.content.toLowerCase()) || intent.content.toLowerCase().includes(m.content.toLowerCase()));
          if (idx !== -1) {
             advisMemories.splice(idx, 1);
-            saveData();
+            await saveData();
             return "I have purged that information from my memory banks, Sir.";
          }
          return "I could not find a matching memory to delete, Sir.";
@@ -889,7 +1100,7 @@ Output JSON only, in this exact format:
     const { 
       message, 
       mode, 
-      deviceId = 'default', 
+      deviceId: _clientDeviceId = 'default', 
       image, 
       currentSpatialObject, 
       selectedComponentId, 
@@ -900,9 +1111,8 @@ Output JSON only, in this exact format:
 
     if (!message) return res.status(400).json({ error: "Protocol violation: Message payload is empty." });
 
-    if (!chatHistories[deviceId]) {
-      chatHistories[deviceId] = [];
-    }
+    const deviceId = OWNER_HISTORY_KEY;
+    if (!chatHistories[deviceId]) chatHistories[deviceId] = [];
 
     const butlerContext = clientButlerContext || {
       activeProjectId,
@@ -938,6 +1148,7 @@ Output JSON only, in this exact format:
         masterBrainRoute
       });
 
+      await saveData();
       return res.json(result);
     } catch (err) {
       console.error("[Butler API] Core Exception:", err);
@@ -952,7 +1163,7 @@ Output JSON only, in this exact format:
   // Browser clients retain their existing endpoint. Android uses the protected
   // route and sends the mobile token as an Authorization: Bearer header.
   app.post(["/api/advis", "/api/jarvis"], handleAdvisRequest);
-  app.post("/api/mobile/advis", requireMobileToken, handleAdvisRequest);
+  app.post("/api/mobile/advis", requireMobileToken, refreshCloudState, handleAdvisRequest);
 
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = require("vite");
