@@ -7,6 +7,8 @@ export function ViewModal({
   currentView, 
   setView, 
   messages, 
+  onOpenConversation,
+  onNewConversation,
   hologramIntensity = 1, 
   setHologramIntensity, 
   soundEnabled = true, 
@@ -25,6 +27,8 @@ export function ViewModal({
   currentView: string, 
   setView: (id: string) => void, 
   messages: ChatMessage[], 
+  onOpenConversation?: (id: string) => void,
+  onNewConversation?: () => void,
   hologramIntensity?: number, 
   setHologramIntensity?: (val: number) => void, 
   soundEnabled?: boolean, 
@@ -47,6 +51,23 @@ export function ViewModal({
   const [perfTime, setPerfTime] = useState(0);
   const [latency, setLatency] = useState<number | string>('...');
   const [batteryLevel, setBatteryLevel] = useState<string>('AC POWER');
+  const [conversations, setConversations] = useState<Array<{ id: string; title: string; updatedAt: number; messageCount: number }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  useEffect(() => {
+    if (currentView !== 'history') return;
+    let active = true;
+    setHistoryLoading(true);
+    fetch('/api/history?mode=list')
+      .then(response => {
+        if (!response.ok) throw new Error('History index unavailable');
+        return response.json();
+      })
+      .then(data => { if (active) setConversations(Array.isArray(data) ? data : []); })
+      .catch(error => console.warn('History index could not be loaded:', error))
+      .finally(() => { if (active) setHistoryLoading(false); });
+    return () => { active = false; };
+  }, [currentView]);
 
   useEffect(() => {
     if (typeof navigator !== 'undefined') {
@@ -116,15 +137,42 @@ export function ViewModal({
         );
       case 'history':
         return (
-          <div className="flex flex-col gap-4 h-full">
-            <h3 className="text-cyan-400 font-bold mb-2">SYSTEM AUDIT LOGS</h3>
-            <div className="bg-black/50 p-4 rounded border border-cyan-500/20 font-mono text-xs text-cyan-300/80 overflow-y-auto h-full flex-1 space-y-2">
-              <div>[{new Date(Date.now() - perfTime).toLocaleTimeString()}] SYSTEM BOOT INITIATED</div>
-              <div>[{new Date(Date.now() - perfTime + 5000).toLocaleTimeString()}] NEURAL PLEXUS ONLINE</div>
-              {messages.map((msg, idx) => (
-                <div key={idx} className="hover:text-cyan-100 transition-colors">
-                  [{new Date(msg.timestamp).toLocaleTimeString()}] {msg.role === 'user' ? 'USER INPUT' : 'SYSTEM RESPONSE'} : {msg.content.substring(0, 40)}...
+          <div className="flex flex-col gap-4 h-full min-h-[420px]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-cyan-400 font-bold">CONVERSATION ARCHIVE</h3>
+                <p className="text-[10px] text-cyan-500/60 mt-1">Saved chats stay out of your workspace until you choose to reopen one.</p>
+              </div>
+              <button
+                onClick={onNewConversation}
+                className="shrink-0 px-3 py-2 rounded border border-cyan-400/40 bg-cyan-950/50 text-cyan-200 hover:bg-cyan-900/60 text-[10px] font-bold tracking-wider"
+              >
+                + NEW CHAT
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar">
+              {historyLoading && <div className="text-cyan-500/60 text-xs py-4">INDEXING CONVERSATIONS...</div>}
+              {!historyLoading && conversations.length === 0 && (
+                <div className="border border-cyan-500/20 rounded-lg bg-black/40 p-6 text-center">
+                  <History className="mx-auto text-cyan-500/50 mb-3" size={24} />
+                  <div className="text-cyan-200 text-sm">No saved conversations yet.</div>
+                  <div className="text-cyan-500/50 text-xs mt-1">Your next conversation will appear here automatically.</div>
                 </div>
+              )}
+              {conversations.map(conversation => (
+                <button
+                  key={conversation.id}
+                  onClick={() => onOpenConversation?.(conversation.id)}
+                  className="w-full text-left p-3 rounded-lg border border-cyan-500/20 bg-black/40 hover:bg-cyan-950/50 hover:border-cyan-400/50 transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="text-cyan-100 text-sm font-semibold line-clamp-2">{conversation.title}</span>
+                    <span className="shrink-0 text-[9px] text-cyan-500/60">{conversation.messageCount} MSG</span>
+                  </div>
+                  <div className="text-[10px] text-cyan-500/50 mt-2">
+                    {conversation.updatedAt ? new Date(conversation.updatedAt).toLocaleString() : 'Saved conversation'}
+                  </div>
+                </button>
               ))}
             </div>
           </div>
