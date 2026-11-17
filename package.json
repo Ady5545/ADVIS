@@ -8,7 +8,12 @@
     "dev": "node server.js",
     "build": "npm test && vite build && esbuild server.js --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "lint": "echo 'Linting complete'",
-    "test": "node --test tests/*.test.cjs"
+    "test": "node --test tests/*.test.cjs",
+    "desktop:dev": "electron desktop/main.cjs",
+    "desktop:package": "electron-builder --config desktop/electron-builder.yml",
+    "desktop:package:mac": "electron-builder --config desktop/electron-builder.yml --mac dmg",
+    "desktop:package:win": "electron-builder --config desktop/electron-builder.yml --win nsis",
+    "desktop:package:linux": "electron-builder --config desktop/electron-builder.yml --linux AppImage"
   },
   "keywords": [
     "browser",
@@ -48,6 +53,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.0",
-    "electron": "^31.3.0"
+    "electron": "^45.3.3",
+    "electron-builder": "^26.18.1"
   }
 }
