@@ -9,6 +9,10 @@ type Device = {
   status: "ONLINE" | "OFFLINE";
   current?: boolean;
   role?: "OWNER" | "MEMBER";
+  agentVersion?: string;
+  capabilities?: string[];
+  unattendedReady?: boolean;
+  foreground?: boolean;
 };
 
 type IncomingControl = {
@@ -486,7 +490,11 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       try {
         await fetch("/api/network/heartbeat", {
           method: "POST", headers: authHeaders(),
-          body: JSON.stringify({ networkId, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent })
+          body: JSON.stringify({
+            networkId, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent,
+            agentVersion: "web", capabilities: ["MESSAGE", "ADVIS_CONTROL", "BROWSER_TAB"],
+            unattendedReady: false, foreground: document.visibilityState === "visible"
+          })
         }).then(readJson);
         const list = await readJson(await fetch(
           "/api/network/devices?networkId=" + encodeURIComponent(networkId) + "&deviceId=" + encodeURIComponent(deviceId),
@@ -957,6 +965,11 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
                       <span className="min-w-0">
                         <span className="block text-xs text-cyan-100 truncate">{device.name} {device.current ? "(THIS DEVICE)" : ""} {device.role === "OWNER" ? "· OWNER" : ""}</span>
                         <span className="block text-[10px] text-cyan-500/60 truncate">{device.platform}</span>
+                        <span className="block text-[9px] text-cyan-300/60 truncate">
+                          {device.agentVersion && device.agentVersion !== "web" ? "AGENT " + device.agentVersion : "BROWSER CLIENT"}
+                          {" · "}{device.capabilities?.includes("FULL_DESKTOP_CAPTURE") ? "DESKTOP CAPABLE" : "TAB ONLY"}
+                          {device.unattendedReady ? " · UNATTENDED READY" : ""}
+                        </span>
                       </span>
                     </span>
                     <span className={"text-[9px] shrink-0 " + (device.status === "ONLINE" ? "text-green-300" : "text-slate-500")}>{device.status}</span>
