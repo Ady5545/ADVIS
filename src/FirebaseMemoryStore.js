@@ -220,6 +220,63 @@ function createFirebaseMemoryStore() {
     return deviceCollection(networkId) + "/" + safeDocumentId(deviceId) + "/commands";
   }
 
+  function rateLimitCollection(networkId) {
+    return networkDocument(networkId) + "/rateLimits";
+  }
+
+  async function consumeNetworkRateLimit(networkId, deviceId, action, limit, windowMs, now = Date.now()) {
+    const path = rateLimitCollection(networkId) + "/" + safeDocumentId(deviceId + "_" + action);
+    const maximum = Math.max(1, Math.min(10000, Number(limit) || 1));
+    const duration = Math.max(1000, Math.min(24 * 60 * 60 * 1000, Number(windowMs) || 60000));
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const document = await request(path).catch(error => {
+        if (error.status === 404) return null;
+        throw error;
+      });
+
+      if (!document) {
+        const initial = { id: deviceId + "_" + action, windowStart: now, count: 1 };
+        try {
+          await request(path + "?currentDocument.exists=false", {
+            method: "PATCH",
+            body: JSON.stringify({ fields: { payload: { stringValue: JSON.stringify(initial) } } })
+          });
+          return { allowed: true, remaining: maximum - 1, retryAfterMs: duration };
+        } catch (error) {
+          if (error.status === 409 || error.status === 400) continue;
+          throw error;
+        }
+      }
+
+      const current = decodeDocument(document) || {};
+      const previousStart = Number(current.windowStart || 0);
+      const reset = !previousStart || now < previousStart || now - previousStart >= duration;
+      const windowStart = reset ? now : previousStart;
+      const count = reset ? 0 : Math.max(0, Number(current.count) || 0);
+      if (count >= maximum) {
+        return { allowed: false, remaining: 0, retryAfterMs: Math.max(0, duration - (now - windowStart)) };
+      }
+      if (!document.updateTime) throw new Error("Rate-limit record is missing its Firestore version.");
+      const next = { id: deviceId + "_" + action, windowStart, count: count + 1 };
+      const query = new URLSearchParams({
+        "updateMask.fieldPaths": "payload",
+        "currentDocument.updateTime": document.updateTime
+      });
+      try {
+        await request(path + "?" + query.toString(), {
+          method: "PATCH",
+          body: JSON.stringify({ fields: { payload: { stringValue: JSON.stringify(next) } } })
+        });
+        return { allowed: true, remaining: maximum - next.count, retryAfterMs: duration - (now - windowStart) };
+      } catch (error) {
+        if (error.status === 409 || error.status === 400) continue;
+        throw error;
+      }
+    }
+    throw new Error("Could not reserve a distributed ADVIS rate-limit slot after concurrent updates.");
+  }
+
   function sessionCollection(networkId) {
     return networkDocument(networkId) + "/sessions";
   }
@@ -394,6 +451,7 @@ function createFirebaseMemoryStore() {
     createNetworkInvite,
     consumeNetworkInvite,
     deleteNetworkDevice,
+    consumeNetworkRateLimit,
     getNetworkSession,
     createNetworkSession,
     updateNetworkSession,
