@@ -55,5 +55,8 @@
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "^45.3.3",
     "electron-builder": "^26.18.1"
+  },
+  "allowScripts": {
+    "electron": true
   }
 }
