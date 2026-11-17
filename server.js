@@ -297,6 +297,20 @@ async function createApp() {
     return { networkId, deviceId, device, network };
   }
 
+  async function authenticateNetworkOwner(req, res) {
+    const auth = await authenticateNetworkDevice(req, res);
+    if (!auth) return null;
+    const supplied = String(req.get("x-advis-owner-token") || "");
+    if (auth.network.ownerDeviceId !== auth.deviceId ||
+        !auth.network.ownerTokenHash ||
+        supplied.length < 32 ||
+        !secureEqualHex(auth.network.ownerTokenHash, hashNetworkSecret(supplied))) {
+      res.status(403).json({ error: "Only the enrolled owner device can manage invitations and revoke devices." });
+      return null;
+    }
+    return auth;
+  }
+
   app.post("/api/network/create", async (req, res) => {
     try {
       if (!networkStore?.createNetwork) return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
