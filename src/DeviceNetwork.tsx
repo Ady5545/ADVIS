@@ -1001,25 +1001,43 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
                   {remoteSessionMode && <button onClick={stopRemoteSession} className="text-red-300 border border-red-400/30 rounded px-2 py-1 shrink-0">STOP {remoteSessionMode === "sharing" ? "SHARING" : "SESSION"}</button>}
                 </div>
               )}
-              {remoteStream && (
-                <div className="border border-cyan-400/40 rounded-xl overflow-hidden">
-                  <div className="relative">
-                    <video ref={remoteVideoRef} autoPlay playsInline muted className="w-full max-h-[55vh] bg-black object-contain"/>
+              {remoteStream && remoteSessionMode === "controller" && (
+                <div className="fixed inset-0 z-[9999] bg-[#020810] text-cyan-50 p-3 md:p-5 flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-3 border-b border-cyan-400/20 pb-3">
+                    <div className="min-w-0">
+                      <div className="text-[10px] tracking-[0.22em] text-cyan-300">ADVIS · REMOTE WORKSTATION</div>
+                      <div className="text-sm md:text-base font-semibold truncate">
+                        {remoteSessionStatus.includes("FULL DESKTOP") ? "FULL DESKTOP SESSION" : "REMOTE ADVIS TAB SESSION"}
+                      </div>
+                      <div className="text-[10px] text-cyan-400/60 truncate">
+                        {devices.find(item => item.id === remoteSessionPeerId)?.name || "Trusted device"} · {remoteSessionStatus}
+                      </div>
+                    </div>
+                    <button onClick={stopRemoteSession} className="shrink-0 flex items-center gap-2 bg-red-500/10 border border-red-400/50 text-red-200 rounded-lg px-4 py-2 text-xs tracking-widest">
+                      <X size={15}/> DISCONNECT
+                    </button>
+                  </div>
+                  <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden border border-cyan-400/30 bg-black">
+                    <video ref={remoteVideoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain bg-black"/>
                     <div
                       tabIndex={0}
                       onPointerMove={event => sendRemotePointer(event, "pointer")}
                       onPointerUp={event => sendRemotePointer(event, "click")}
                       onKeyDown={sendRemoteKey}
                       onWheel={event => {
+                        event.preventDefault();
                         const channel = controlChannelsRef.current.get(remoteSessionId);
                         if (channel?.readyState === "open") channel.send(JSON.stringify({ kind: "scroll", x: event.deltaX, y: event.deltaY }));
                       }}
                       className="absolute inset-0 z-10 cursor-crosshair outline-none"
                       style={{ touchAction: "none" }}
-                      aria-label="Remote ADVIS tab control surface"
+                      aria-label="Remote screen control surface"
                     />
                   </div>
-
+                  <div className="flex items-center justify-between text-[10px] text-cyan-500/70">
+                    <span>INPUT: POINTER · KEYBOARD · SCROLL WHERE SUPPORTED</span>
+                    <span>SESSION ACTIVE · TARGET STOP CONTROL AVAILABLE</span>
+                  </div>
                 </div>
               )}
             </div>
