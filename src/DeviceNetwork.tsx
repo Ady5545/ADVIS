@@ -129,12 +129,10 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         });
         addActivity("TAB CONTROL REQUEST", String(data.fromTabName || "Another tab") + " requested " + String(data.payload?.action || "control"));
       } else if (data.type === "CONTROL_RESULT" && data.toTabId === tabId) {
-        if (data.status === "APPROVED") {
-          window.dispatchEvent(new CustomEvent("advis-remote-control-approved", { detail: data.payload || {} }));
-          addActivity("TAB CONTROL APPROVED", "The selected ADVIS tab accepted the control request.");
-        } else {
-          addActivity("TAB CONTROL REJECTED", "The selected ADVIS tab declined the request.");
-        }
+        addActivity(
+          data.status === "APPROVED" ? "TAB CONTROL APPROVED" : "TAB CONTROL REJECTED",
+          data.status === "APPROVED" ? "The selected ADVIS tab accepted the control request." : "The selected ADVIS tab declined the request."
+        );
       } else if (data.type === "TAB_GOODBYE") {
         setLocalTabs(previous => previous.filter(tab => tab.id !== data.tabId));
       }
@@ -400,12 +398,16 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     if (!incoming) return;
     try {
       if (incoming.source === "tab") {
+        // The receiving tab executes the approved action locally. The requester
+        // receives only the approval result, never a command to execute on itself.
+        if (approved) {
+          window.dispatchEvent(new CustomEvent("advis-remote-control-approved", { detail: incoming.payload }));
+        }
         tabChannel.current?.postMessage({
           type: "CONTROL_RESULT",
           toTabId: incoming.fromTabId,
           requestId: incoming.requestId,
-          status: approved ? "APPROVED" : "REJECTED",
-          payload: approved ? incoming.payload : undefined
+          status: approved ? "APPROVED" : "REJECTED"
         });
         addActivity(approved ? "TAB CONTROL ALLOWED" : "TAB CONTROL REJECTED", incoming.fromDeviceName);
       } else if (approved) {
