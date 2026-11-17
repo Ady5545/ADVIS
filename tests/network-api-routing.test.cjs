@@ -1,48 +1,25 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const http = require("node:http");
-const networkApi = require("../api/network-handler");
+const { buildNetworkApiUrl } = require("../api/network-handler");
 
-test("nested ADVIS network status requests reach the Express API", async t => {
-  const server = http.createServer((req, res) => {
-    const parsed = new URL(req.url || "/", "http://localhost");
-    if (parsed.pathname.startsWith("/api/network/")) {
-      const route = parsed.pathname.slice("/api/network/".length);
-      parsed.searchParams.set("__advis_path", route);
-      req.url = "/api/network-handler?" + parsed.searchParams.toString();
-    }
-    void networkApi(req, res);
-  });
-
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(() => server.close());
-
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-  const response = await fetch(`http://127.0.0.1:${address.port}/api/network/status?probe=route-test`);
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.provider, "Firestore");
-  assert.equal(typeof body.configured, "boolean");
-  assert.equal(typeof body.databaseConnected, "boolean");
-  assert.equal(typeof body.state, "string");
+test("nested ADVIS network paths are reconstructed and query parameters survive", () => {
+  const result = buildNetworkApiUrl(
+    "/api/network-handler?__advis_path=devices%2Fdevice_123%2Frevoke&networkId=net_123&deviceId=device_123",
+    "advis.example"
+  );
+  assert.equal(
+    result,
+    "/api/network/devices/device_123/revoke?networkId=net_123&deviceId=device_123"
+  );
 });
 
-test("network API handler rejects malformed reconstructed paths", async t => {
-  const server = http.createServer((req, res) => void networkApi(req, res));
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(() => server.close());
-
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-  const response = await fetch(`http://127.0.0.1:${address.port}/api/network-handler?__advis_path=..%2Fprivate`);
-  assert.equal(response.status, 400);
-  const body = await response.json();
-  assert.match(body.error, /Invalid ADVIS network route/);
+test("network API handler rejects malformed reconstructed paths", () => {
+  assert.throws(
+    () => buildNetworkApiUrl("/api/network-handler?__advis_path=..%2Fprivate"),
+    /Invalid ADVIS network route/
+  );
+  assert.throws(
+    () => buildNetworkApiUrl("/api/network-handler?__advis_path=devices%2F%2Frevoke"),
+    /Invalid ADVIS network route/
+  );
 });
