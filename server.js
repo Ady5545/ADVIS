@@ -191,7 +191,7 @@ async function createApp() {
   const hashNetworkSecret = value => crypto.createHash("sha256").update(String(value)).digest("hex");
   const safeNetworkId = value => /^[A-Za-z0-9_-]{20,100}$/.test(String(value || ""));
   const safeDeviceId = value => /^[A-Za-z0-9_-]{12,100}$/.test(String(value || ""));
-  const allowedControlActions = new Set(["DISPLAY_MODEL", "CLOSE_MODEL", "SET_MODE", "OPEN_VIEW", "SPEAK"]);
+  const allowedControlActions = new Set(["DISPLAY_MODEL", "CLOSE_MODEL", "SET_MODE", "OPEN_VIEW", "SPEAK", "START_REMOTE_SESSION"]);
 
   function secureEqualHex(left, right) {
     const a = Buffer.from(String(left || ""), "hex");
@@ -314,11 +314,26 @@ async function createApp() {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
       const { targetDeviceId, kind, payload, correlationId } = req.body || {};
-      if (!safeDeviceId(targetDeviceId) || !["PROMPT", "CONTROL", "PROMPT_REPLY"].includes(kind)) {
+      if (!safeDeviceId(targetDeviceId) || !["PROMPT", "CONTROL", "PROMPT_REPLY", "RTC_SIGNAL"].includes(kind)) {
         return res.status(400).json({ error: "Unsupported device command." });
       }
       if (kind === "CONTROL" && !allowedControlActions.has(payload?.action)) {
         return res.status(400).json({ error: "That remote control action is not supported." });
+      }
+      if (kind === "RTC_SIGNAL") {
+        const signalTypes = new Set(["OFFER", "ANSWER", "ICE", "END"]);
+        if (!safeDeviceId(payload?.sessionId) || !signalTypes.has(payload?.type) ||
+            JSON.stringify(payload).length > 180_000) {
+          return res.status(400).json({ error: "Invalid or oversized remote-session signal." });
+        }
+        if (payload.type === "OFFER" || payload.type === "ANSWER") {
+          if (!payload.sdp || String(payload.sdp).length > 160_000) {
+            return res.status(400).json({ error: "Remote-session description is invalid." });
+          }
+        }
+        if (payload.type === "ICE" && (!payload.candidate || String(payload.candidate.candidate || "").length > 8_000)) {
+          return res.status(400).json({ error: "Remote-session ICE candidate is invalid." });
+        }
       }
       if (targetDeviceId === auth.deviceId) return res.status(400).json({ error: "A device cannot send a remote command to itself." });
       const target = await networkStore.getNetworkDevice(auth.networkId, targetDeviceId);
