@@ -448,8 +448,8 @@ ${contextSummary}
 
     const aiReply = response.text || "I was unable to process that.";
 
-    chatHistories[deviceId].push({ role: "user", content: message });
-    chatHistories[deviceId].push({ role: "assistant", content: aiReply });
+    chatHistories[deviceId].push({ role: "user", content: message, timestamp: Date.now() });
+    chatHistories[deviceId].push({ role: "assistant", content: aiReply, timestamp: Date.now() });
     if (chatHistories[deviceId].length > 20) {
       chatHistories[deviceId] = chatHistories[deviceId].slice(chatHistories[deviceId].length - 20);
     }
