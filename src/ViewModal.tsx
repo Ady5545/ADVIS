@@ -76,7 +76,7 @@ export function ViewModal({
     return () => clearInterval(interval);
   }, []);
 
-  if (currentView === 'home') return null;
+  if (currentView === 'home' || currentView === 'devices') return null;
 
   const renderContent = () => {
     switch (currentView) {
