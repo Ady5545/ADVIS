@@ -20,17 +20,17 @@
 
 | Capability | Current state | Gap |
 |---|---|---|
-| Device list | Firestore device documents, polled by client | Firestore connectivity and production enrollment need verification |
-| Identity | Browser localStorage device ID | Native stable identity and secure storage needed |
-| Rename | Editable web-panel name sent on heartbeat | Test cloud persistence and native agent sync |
-| Enrollment | Private network ID/secret invitation link | Improve to one-time QR/pairing code with owner approval, expiry, replay protection |
-| Presence | 3-second heartbeat; 35-second online timeout | Agent lifecycle, stale status, retry/backoff, last-seen UX |
-| Commands | ADVIS-specific actions | Not full OS input |
-| WebRTC | Browser-tab offer/answer prototype | Not full desktop capture, and cross-network relay is not configured |
-| Desktop agent | No Electron main/preload or native capture/input implementation in repository | Entire agent needs implementation |
-| Android agent | Separate ADVIS Mobile project exists | Needs integration with directory and Android's supported projection/input flows |
-| TURN | Client can read a STUN URL; no production TURN configuration verified | TURN relay and short-lived credentials required |
-| Revocation/audit | Basic per-device bearer token and command records | Device revocation, token rotation, session ownership, audit history |
+| Device list | Firestore device documents; private per-network list is polled by clients | Production Firestore connectivity and two-device runtime enrollment remain unverified |
+| Identity | Browser profile ID in localStorage; Electron agent stores a separate ID and token in OS-backed safeStorage | Stable hardware identity and browser-to-native identity migration remain open |
+| Rename | Browser panel and desktop agent send the editable name on heartbeat | Live cross-device persistence is not yet verified |
+| Enrollment | Server-generated owner capability plus hashed, single-use 10-minute invitation; Firestore updateTime precondition prevents replay | Legacy networks are rejected with HTTP 410 and must be recreated/re-enrolled; QR rendering is not added yet |
+| Presence | Browser heartbeat about every 3 seconds; desktop agent heartbeat every 5 seconds; online timeout 35 seconds | Agent version, foreground/background state, robust retry/backoff and live restart test remain |
+| Commands | ADVIS actions plus authenticated RTC signaling; desktop agent accepts RTC signaling and native input events | Full session state machine, audit history, strict input authorization and cross-network integration tests remain |
+| WebRTC | Browser-tab path plus Electron display capture and native data-channel path; server can mint short-lived TURN credentials | TURN URL/secret and end-to-end relay tests are not verified; STUN-only networks may fail |
+| Desktop agent | Electron main/preload, visible tray, secure credential storage, one-time enrollment, display preparation, WebRTC and OS input adapters are in source | Installers, signing/notarisation and per-OS runtime tests are not yet complete |
+| Android agent | Not implemented in this repository | ADVIS Mobile repo access/integration and Android MediaProjection/foreground-service work remain |
+| TURN | Backend can mint time-limited HMAC credentials from server-only ADVIS_TURN_URL and ADVIS_TURN_SECRET | TURN provider settings and relay availability need configuration and live verification |
+| Revocation/audit | Owner-only revoke and revoke-all delete device records; agent stops sessions on 401/403/410 | Token rotation, durable audit history, immediate push revocation, session binding/rate limiting remain |
 
 ## 3. Target architecture
 
@@ -73,39 +73,42 @@
 ## 4. Delivery phases and exit criteria
 
 ### Phase 0 — Cloud directory diagnostics and recovery (P0)
-- [ ] Probe Firestore itself (OAuth plus harmless collection read); adapter-method existence alone is not sufficient.
-- [ ] Distinguish missing variables, malformed service account, OAuth failure, Firestore permission/database failure, and healthy.
-- [ ] Verify the production diagnostic endpoint and device create/join/heartbeat/list operations.
-- [ ] Add request timeout, input validation, rate limits, and sanitized diagnostics.
+- [x] Probe Firestore itself (OAuth plus harmless collection read); adapter-method existence alone is not sufficient.
+- [x] Distinguish unconfigured adapter, authentication/permission errors, database read failure, and healthy response without exposing credentials.
+- [ ] Verify the production diagnostic endpoint and device create/join/heartbeat/list operations against a live Firestore project.
+- [ ] Add production API rate limits, stronger request timeouts, and operational alerts.
 
-**Exit:** Production reports Firestore healthy; two test clients can enroll, rename, heartbeat, and see each other in one private network.
+**Status:** Diagnostic code is committed. The earlier Phase 0 production build is READY, but live Firestore connectivity and two-device enrollment have not been independently verified.
 
 ### Phase 1 — Device identity, enrollment, presence, revocation (P0)
-- [ ] Define stable installation IDs for web, desktop, and Android; separate tabs must not masquerade as separate physical devices.
-- [ ] Add expiring, one-time QR/pairing-code enrollment with replay prevention and first-time owner approval.
-- [ ] Preserve identity across restart and app update; migrate existing invite-linked devices.
-- [ ] Add authenticated rename, agent/platform/capability updates, online/offline state, last-seen time, and retry/backoff.
-- [ ] Add revoke/remove, token rotation, and session/audit history.
+- [x] Add separate owner and device tokens; only token hashes are stored server-side.
+- [x] Add owner-generated one-time invitations that expire after 10 minutes and use Firestore update-time preconditions to block replay.
+- [x] Add owner-only revoke and revoke-all endpoints; stop a desktop session when the agent's next authenticated request is rejected.
+- [x] Add browser setup UI for one-time invitations, owner/member roles, and revoke actions.
+- [ ] Add QR rendering, durable native installation identity migration, token rotation, agent version/capability reporting, and a live two-device restart/re-enrollment test.
+- [ ] Add automatic push revocation/session-ownership checks rather than waiting for the next poll.
 
-**Exit:** Two devices on different networks enroll once, see each other, rename independently, restart, and reconnect. Revocation blocks new sessions immediately.
+**Status:** The new protocol is implemented in source. Legacy permanent-secret networks now receive HTTP 410 and must be disconnected and recreated, then all trusted devices re-enrolled. Production migration is not yet live-verified.
 
 ### Phase 2 — Reliable global session transport (P0)
-- [ ] Implement authenticated session state machine: requested, accepted, connecting, connected, reconnecting, ended, revoked, expired.
-- [ ] Finish offer/answer/ICE exchange and TURN fallback with short-lived server-minted credentials.
-- [ ] Bind signaling and data-channel identity to the two enrolled device tokens.
-- [ ] Test same LAN, separate home networks, mobile hotspot, restrictive NAT, network loss, and relay outage.
+- [x] Add server-authenticated ICE configuration and short-lived TURN credentials derived from server-only settings.
+- [x] Add desktop-agent RTC offer/answer handling over the existing authenticated command channel.
+- [ ] Configure and verify a TURN relay provider; without it, the server returns STUN-only configuration.
+- [ ] Enforce a full session state machine, command/session binding, rate limits, reconnect/backoff, and session expiry.
+- [ ] Test across separate home networks, mobile hotspot, restrictive NAT, and relay outage.
 
-**Exit:** Two browser clients can establish a full-screen browser test session across separate networks with reliable disconnect. This is a transport milestone, not yet full desktop.
+**Status:** Signaling and credential-minting code are present. Cross-network media connectivity is not yet proven because a live TURN relay has not been configured and tested.
 
 ### Phase 3 — Native desktop agent and full desktop control (P0)
-- [ ] Add Electron main/preload, packaging, startup option, secure IPC, update path, and local agent status.
-- [ ] Enumerate displays and stream the full selected display.
-- [ ] Implement supported pointer, click, keyboard, scroll, and optional clipboard input.
-- [ ] Add OS-permission onboarding and persistent unattended-access opt-in.
-- [ ] Test macOS first (the user's MacBook Air M2), Windows second, Linux after a supported portal/input matrix.
-- [ ] Show live session and Stop control on the target; allow remote disconnect and owner revocation.
+- [x] Add Electron main/preload, visible tray, secure credential storage, local permissions panel, login-start setting, and packaging configuration.
+- [x] Add one-time local enrollment and explicit unattended-access setting (OFF by default).
+- [x] Add a local screen-preparation step so later Connect requests reuse a prepared display stream instead of requesting ADVIS approval each time while the agent stays running.
+- [x] Add initial macOS, Windows, and Linux/X11 input adapters for pointer, click, keyboard, and scroll (platform-specific limitations are recorded).
+- [x] Add macOS/Windows/Linux packaging workflow.
+- [ ] Build, sign/notarise, install, and test the agent on actual Mac, Windows, and Linux target machines; verify display capture, input, launch-at-login, sleep/wake, and revoke behavior.
+- [ ] Add clipboard support, macOS hover/scroll, Linux Wayland/PipeWire portal input matrix, and native update channel.
 
-**Exit:** Two enrolled desktop agents on different networks can Connect with one click after initial setup, view the entire selected desktop, and operate supported input. Both sides can end the session immediately.
+**Status:** Desktop-agent code and packaging workflows are in main. They are not yet validated as installable, signed, or production-ready remote-desktop installers. The unattended stream must be prepared locally after an agent process starts; no browser-only or hidden background capture is claimed.
 
 ### Phase 4 — Android agent (P1)
 - [ ] Integrate Android identity and directory presence with ADVIS Mobile.
@@ -113,18 +116,16 @@
 - [ ] Add only supported, explicitly enabled remote input capabilities.
 - [ ] Test Android versions, rotation, app backgrounding, battery restrictions, reconnect, and session stop.
 
-**Exit:** Supported Android devices appear in the same owner directory and report their real capture/input capability. Connect works only for supported, configured sessions.
+**Status:** Not implemented in the separate ADVIS Mobile repository in this work.
 
 ### Phase 5 — Security, reliability, production hardening (P0 before general availability)
-- [ ] Threat-model enrollment, device tokens, signaling, screen streams, and remote input.
-- [ ] Add session limits, rate limits, replay protection, token rotation, device revocation, and revoke-all.
-- [ ] Validate every remote input event and ensure it is accepted only inside the authenticated active session.
-- [ ] Verify no secrets are in client bundles, logs, or public source.
-- [ ] Add cross-platform integration tests, app restart tests, cold-start tests, relay failover tests, and an OS permission/revocation test matrix.
-- [ ] Publish a capability matrix; do not mark any OS or capability supported before its test suite passes.
+- [x] Add hashed per-device credentials, owner-only enrollment management, expiring single-use invites, input event validation, safe server-side TURN credential generation, and an agent-side Stop path on token rejection.
+- [x] Add automated tests for Firestore health, invitation redemption/expiry, token helpers, TURN HMAC credentials, input validation, and source syntax.
+- [ ] Add production rate limits, token rotation, detailed but safe audit history, full session binding and anti-replay checks.
+- [ ] Run cross-network, cross-platform, OS permission/revocation, relay failover, sleep/wake, and cold-start test matrices.
+- [ ] Publish a tested capability matrix; do not advertise any OS/capability as production ready before its tests pass.
 
-**Release criteria:** No stranger can enumerate devices; no silent enrollment; unattended access is an explicit device setting; active sessions are visible and stoppable; no unsupported platform is advertised as ready.
-
+**Release criteria:** No public device enumeration; no silent enrollment; target-side unattended access is explicit; active sessions are visible and stoppable; unsupported platform behavior is clearly labeled.
 ## 5. Dependencies and decisions
 - A valid Firebase/Firestore project, database, and server-only service account.
 - A TURN relay service and server-only secret for expiring credentials.
@@ -145,6 +146,9 @@
 
 | Date | Change | Verification |
 |---|---|---|
-| 2026-11-17 | Added a server-side device-network status endpoint and explicit Devices-panel API/configuration errors. | Production build READY; live Firestore probe and cross-network enrollment remain pending. |
-| 2026-11-17 | Audited the current repository: browser localStorage identity, Firestore polling relay, and a browser-tab WebRTC prototype exist; no native Electron main/preload or desktop agent is present. | GitHub main tree and Vercel production deployment history inspected. |
-| 2026-11-17 | Added Firestore connectivity probe and updated /api/network/status to report missing setup, adapter initialization failure, live database connectivity, permission errors, and missing database/path separately. | Source committed; production build pending and live Firestore test still required. |
+| 2026-11-17 | Added the server-side Firestore health probe and a diagnostic status endpoint; the Devices panel distinguishes API/configuration failures. | Historical Phase 0 production deployment reached READY; current live Firestore state has not been independently verified. |
+| 2026-11-17 | Added v2 owner/device credentials, hashed one-time invitations, 10-minute expiry, atomic Firestore redemption, owner-only revoke/revoke-all, legacy-network rejection, and server-side TURN credential minting. | Source is on main; automated tests cover invitation replay/expiry and TURN HMAC generation. Production endpoint and real multi-device enrollment still need validation. |
+| 2026-11-17 | Updated the browser Devices panel to create and join one-time invitations, identify owner/member devices, revoke members, and label native desktop Connect separately from browser-tab sharing. | Core build workflow passed; UI has not yet been verified against live Firestore devices. |
+| 2026-11-17 | Added the Electron desktop-agent scaffold: visible tray/window, secure credential storage, device enrollment, heartbeat, authenticated RTC signaling, reusable local display preparation, and platform-specific input adapters. | JavaScript parser and input-validation tests passed in CI. No target-OS installer, signing, screen-capture or live input end-to-end test has run. |
+| 2026-11-17 | Added native package scripts, Electron builder configuration, lockfile synchronization workflow, and macOS/Windows/Linux package workflow. | Lockfile sync and web/server core build workflows passed. The new multi-OS packaging workflow has not yet been confirmed. |
+| 2026-11-17 | Expanded automated checks to 12 tests covering Firestore health, invitation replay/expiry, token and identifier helpers, TURN credentials, native input validation, and JS syntax. | GitHub Actions core build on commit 6cb4f1e2 passed: 12 passed, 0 failed; Vite and server bundles built. The later screen-preparation change is awaiting its next CI run. |
