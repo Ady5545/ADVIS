@@ -94,7 +94,7 @@
 - [x] Add server-authenticated ICE configuration and short-lived TURN credentials derived from server-only settings.
 - [x] Add desktop-agent RTC offer/answer handling over the existing authenticated command channel.
 - [ ] Configure and verify a TURN relay provider; without it, the server returns STUN-only configuration.
-- [ ] Enforce a full session state machine, command/session binding, rate limits, reconnect/backoff, and session expiry.
+- [x] Enforce a durable OFFERED → CONNECTING → ENDED session state machine, bind signaling to the exact controller/target pair, reject cross-pair and replayed signals, and expire sessions after two hours.\n- [ ] Add distributed rate limits, reconnect/backoff, and session activity renewal.
 - [ ] Test across separate home networks, mobile hotspot, restrictive NAT, and relay outage.
 
 **Status:** Signaling and credential-minting code are present. Cross-network media connectivity is not yet proven because a live TURN relay has not been configured and tested.
@@ -121,7 +121,7 @@
 ### Phase 5 — Security, reliability, production hardening (P0 before general availability)
 - [x] Add hashed per-device credentials, owner-only enrollment management, expiring single-use invites, input event validation, safe server-side TURN credential generation, and an agent-side Stop path on token rejection.
 - [x] Add automated tests for Firestore health, invitation redemption/expiry, token helpers, TURN HMAC credentials, input validation, and source syntax.
-- [ ] Add production rate limits, token rotation, detailed but safe audit history, full session binding and anti-replay checks.
+- [x] Add durable session binding and replay-resistant state transitions for WebRTC signaling.\n- [ ] Add distributed rate limits, token rotation, detailed but safe audit history, and push-based session revocation.
 - [ ] Run cross-network, cross-platform, OS permission/revocation, relay failover, sleep/wake, and cold-start test matrices.
 - [ ] Publish a tested capability matrix; do not advertise any OS/capability as production ready before its tests pass.
 
@@ -151,4 +151,4 @@
 | 2026-11-17 | Updated the browser Devices panel to create and join one-time invitations, identify owner/member devices, revoke members, and label native desktop Connect separately from browser-tab sharing. | Core build workflow passed; UI has not yet been verified against live Firestore devices. |
 | 2026-11-17 | Added the Electron desktop-agent scaffold: visible tray/window, secure credential storage, device enrollment, heartbeat, authenticated RTC signaling, reusable local display preparation, and platform-specific input adapters. | JavaScript parser and input-validation tests passed in CI. No target-OS installer, signing, screen-capture or live input end-to-end test has run. |
 | 2026-11-17 | Added native package scripts, Electron builder configuration, lockfile synchronization workflow, and macOS/Windows/Linux package workflow. | Lockfile sync and web/server core build workflows passed. The new multi-OS packaging workflow has not yet been confirmed. |
-| 2026-11-17 | Expanded automated checks to 12 tests covering Firestore health, invitation replay/expiry, token and identifier helpers, TURN credentials, native input validation, and JS syntax. | GitHub Actions core build on commit 6cb4f1e2 passed: 12 passed, 0 failed; Vite and server bundles built. The later screen-preparation change is awaiting its next CI run. |
+| 2026-11-17 | Expanded automated checks to 12 tests covering Firestore health, invitation replay/expiry, token and identifier helpers, TURN credentials, native input validation, and JS syntax. | GitHub Actions core build on commit 6cb4f1e2 passed: 12 passed, 0 failed; Vite and server bundles built. The later screen-preparation change is awaiting its next CI run. |\n| 2026-11-17 | Added Firestore-backed remote-session records with optimistic concurrency, exact two-device signaling binding, OFFERED → CONNECTING → ENDED transitions, replay protection, two-hour expiry, and six focused state-machine tests. | Code and tests committed to main; current Vercel status check reports a build-rate-limit failure, so the latest changes are not yet verified by a production build. |
