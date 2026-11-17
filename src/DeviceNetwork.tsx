@@ -50,7 +50,7 @@ async function readJson(response: Response) {
   return data;
 }
 
-export function DeviceNetwork() {
+export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [networkId, setNetworkId] = useState(() => localStorage.getItem(NETWORK_KEY) || "");
   const [networkSecret, setNetworkSecret] = useState(() => localStorage.getItem(SECRET_KEY) || "");
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
@@ -311,7 +311,11 @@ export function DeviceNetwork() {
     addActivity("DEVICE DISCONNECTED", "This browser has left the ADVIS network.");
   };
 
+  if (!visible) return null;
+
   return (
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 pointer-events-auto">
+      <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-2xl border border-cyan-400/30 bg-slate-950/95 p-5 shadow-[0_0_50px_rgba(0,180,255,0.16)] custom-scrollbar">
     <div className="flex flex-col gap-5 text-cyan-100">
       <div className="flex items-center justify-between gap-3">
         <div>
@@ -425,6 +429,8 @@ export function DeviceNetwork() {
           {activity.map(item => <div key={item.id} className="flex justify-between gap-3 text-[10px] border-b border-cyan-500/10 pb-2"><div><span className="text-cyan-200">{item.title}</span><div className="text-cyan-500/60 mt-0.5">{item.detail}</div></div><span className="text-cyan-500/40 shrink-0">{new Date(item.at).toLocaleTimeString()}</span></div>)}
           {!activity.length && <p className="text-[10px] text-cyan-500/50">No network activity yet.</p>}
         </div>
+      </div>
+    </div>
       </div>
     </div>
   );
