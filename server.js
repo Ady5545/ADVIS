@@ -382,7 +382,8 @@ async function createApp() {
     const client = getGeminiClient();
     if (!client) return;
     
-    // Quick heuristic: Skip very short non-informational messages or greetings
+    // Quick heuristic: skip greetings and fragments, but keep short explicit preferences/corrections.
+
     const lower = userMessage.toLowerCase();
     const isGreeting = ["hello", "hi", "hey", "good morning", "good evening"].includes(lower.trim());
     
@@ -1130,7 +1131,7 @@ Output JSON only, in this exact format:
         advisProjects,
         chatHistories,
         saveData,
-        evaluateAndStoreMemory,
+        getRelevantMemories,
         getGeminiClient,
         SPATIAL_REGISTRY,
         MODEL_SYNONYMS,
@@ -1144,6 +1145,8 @@ Output JSON only, in this exact format:
         masterBrainRoute
       });
 
+      // Memory extraction is part of the turn's durable write path, not a fire-and-forget task.
+      await evaluateAndStoreMemory(message, butlerContext ? butlerContext.activeProjectId : null);
       await saveData();
       return res.json(result);
     } catch (err) {
