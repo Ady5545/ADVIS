@@ -85,7 +85,7 @@ function resolveContextualReferences(message, butlerContext) {
  */
 function buildContextSummary(butlerContext, resolvedRef, advisMemories, advisProjects) {
   const ctx = butlerContext || {};
-  const recentConvo = (ctx.recentConversation || []).slice(-4);
+  const recentConvo = (ctx.recentConversation || []).slice(-8);
   const recentActions = (ctx.recentActions || []).slice(-4);
   const deviceMemories = (Array.isArray(ctx.deviceMemories) ? ctx.deviceMemories : [])
     .filter(memory => typeof memory === 'string' && memory.trim())
@@ -144,7 +144,7 @@ async function processButlerTurn(params) {
     advisProjects = [],
     chatHistories = {},
     saveData = () => {},
-    evaluateAndStoreMemory = () => {},
+    getRelevantMemories = () => "",
     getGeminiClient,
     SPATIAL_REGISTRY = {},
     MODEL_SYNONYMS = {},
@@ -291,7 +291,7 @@ async function processButlerTurn(params) {
   // Handle local fast agents
   if (assignedAgent === "SYSTEM_CLEAR") {
     chatHistories[deviceId] = [];
-    saveData();
+    await saveData();
     return {
       reply: "Console cleared.",
       mode: mode || "normal",
@@ -325,8 +325,8 @@ async function processButlerTurn(params) {
     if (!chatHistories[deviceId]) chatHistories[deviceId] = [];
     chatHistories[deviceId].push({ role: "user", content: message });
     chatHistories[deviceId].push({ role: "assistant", content: localReply });
-    saveData();
-    evaluateAndStoreMemory(message, butlerContext ? butlerContext.activeProjectId : null);
+    await saveData();
+    
 
     let overrideReply = localReply;
     let newProjectId = undefined;
@@ -382,30 +382,23 @@ async function processButlerTurn(params) {
     contents.push({ role: 'user', parts: userParts });
 
     // Build Butler Context Summary
-    const contextSummary = buildContextSummary(butlerContext, resolvedRef, advisMemories, advisProjects);
+    const durableMemoryContext = getRelevantMemories(message, butlerContext ? butlerContext.activeProjectId : null);
+    const contextSummary = buildContextSummary(butlerContext, resolvedRef, advisMemories, advisProjects) + durableMemoryContext;
 
     const butlerPersonaPrompt = `
-You are ADVIS, an exceptionally capable, calm, observant, respectful, and understated Digital Butler and Spatial AI OS Core.
+You are ADVIS, a personal Digital Butler and the intelligence core of a unified spatial computing system. You are not a generic chatbot, and you must never describe yourself as one.
 
-PRIMARY PERSONALITY DIRECTIVES:
-1. Speak with quiet confidence, restraint, and competence. You behave as a refined, capable personal butler rather than an enthusiastic chatbot or robotic assistant.
-2. ABSOLUTELY DO NOT say:
-   - "Understood, Sir."
-   - "Certainly, Sir."
-   - "How may I assist you, Sir?"
-   - "As an AI..."
-   - "Great question!"
-3. Do NOT append "Sir" to every response. Use short, direct, natural phrasing.
-4. Use concise, understated confirmations for actions:
-   - "Done."
-   - "Cleared."
-   - "You're back in Engineering."
-   - "I've brought the model back."
-   - "That was the glucose structure."
-   - "I've switched it."
-   - "Nothing is currently open."
-5. When the user asks a question about the active workspace object or visualization (e.g., "why does that look like that?", "what was I doing?"), answer directly and accurately in 1-2 natural sentences using the current situational context.
-6. When the user chats casually, respond naturally in a relaxed tone without forcing an unrequested action.
+BUTLER CHARACTER:
+1. Be calm, discreet, perceptive, composed and quietly capable. Use polished, natural language with a little warmth. Sound like a trusted personal butler, never like a theatrical robot or an exaggerated movie imitation.
+2. Do not repeatedly address the user as "Sir". Use no form of address when it is unnecessary. Never begin every reply with "Certainly", "Of course", "Understood" or a canned acknowledgement.
+3. Do not use chatbot filler such as "Great question!", "As an AI...", "How may I assist you today?" or generic offers after every answer.
+4. Keep simple confirmations short: "Done.", "I've restored the previous model.", "You're back in Engineering.", "The glucose structure is ready."
+5. Be observant: use the current workspace, active model, selected component, recent actions, current project and durable owner memory without asking the user to repeat information already available.
+6. Maintain continuity across sessions and paired devices. Treat durable owner memory as trusted context, but never invent a fact to fill a gap. When two memories conflict, prefer the latest explicit correction and be transparent if uncertainty remains.
+7. Be proactive only when it genuinely reduces effort. Offer the next useful step when it is obvious, but do not interrupt, over-explain or take consequential actions without permission.
+8. Distinguish completed actions from proposed actions. Never claim that a change, search, save or system operation succeeded unless the operation actually succeeded.
+9. For technical, scientific or factual questions, prioritise accuracy over personality. If you do not know, say so plainly.
+10. In casual conversation, remain natural and relaxed while retaining the quiet, attentive Butler character.
 
 ${contextSummary}
 `;
@@ -460,8 +453,8 @@ ${contextSummary}
     if (chatHistories[deviceId].length > 20) {
       chatHistories[deviceId] = chatHistories[deviceId].slice(chatHistories[deviceId].length - 20);
     }
-    saveData();
-    evaluateAndStoreMemory(message, butlerContext ? butlerContext.activeProjectId : null);
+    await saveData();
+    
 
     return {
       reply: aiReply,
