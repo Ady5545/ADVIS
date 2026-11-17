@@ -870,7 +870,7 @@ export default function App() {
 
       // Keep conversational relay separate from remote execution. Device-control
       // requests must use the explicit approval flow in the Devices panel.
-      if (/\\b(open|launch|close|lock|shutdown|restart|take a screenshot|create a folder|run a command|execute)\\b/i.test(requestText)) {
+      if (/\b(open|launch|close|lock|shutdown|restart|take a screenshot|create a folder|run a command|execute)\b/i.test(requestText)) {
         await detail.respond("Message received. This appears to request a device action. Please send it through Remote ADVIS Control so this device can ask for approval before acting.");
         return;
       }
