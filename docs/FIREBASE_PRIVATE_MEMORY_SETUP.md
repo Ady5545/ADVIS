@@ -10,7 +10,7 @@ Create or select a server service account for the project and grant it the minim
 
 ## 2. Vercel environment variables
 
-In the Vercel project named `advis`, add these variables for **Preview** and **Production**:
+In the Vercel project named `advis`, add these variables to **Preview only first**. Creating a Firebase project and Firestore database does not connect the app by itself; these server-side Vercel variables are the connection. Add the same variables to **Production only after the Preview memory tests pass and the owner approves a production rollout**:
 
 - `FIREBASE_SERVICE_ACCOUNT_JSON` — the complete service-account JSON document as one secret value.
 - `FIREBASE_PROJECT_ID` — optional if the JSON already contains `project_id`.
