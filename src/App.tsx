@@ -13,6 +13,7 @@ import { Background } from './Background';
 import { useSpeechRecognition } from './useSpeechRecognition';
 import { playStateTransitionSound } from './audioEffects';
 import { ViewModal } from './ViewModal';
+import { DeviceNetwork } from './DeviceNetwork';
 import { MobileNav } from './MobileNav';
 import { Fingerprint, Lock } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -1250,6 +1251,8 @@ export default function App() {
       })()}
 
       <HolographicCursor handTracking={handTracking} isSpatial={!!currentSpatialObject || !!activeLearningSession} />
+      <DeviceNetwork visible={currentView === 'devices'} />
+
       <ViewModal 
         currentView={currentView} 
         setView={setCurrentView} 
