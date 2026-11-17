@@ -169,6 +169,198 @@ async function createApp() {
   // Firebase is used for shared persistence when configured, but never gates access.
   app.use(["/api/memory", "/api/projects", "/api/history", "/api/advis", "/api/jarvis"], refreshCloudState);
 
+  // --- PRIVATE ADVIS DEVICE NETWORK ---
+  // Vercel functions are stateless, so Firestore is the durable relay.
+  // Devices poll for commands; no long-lived WebSocket server is required.
+  const networkStore = firebaseMemoryStore;
+  const hashNetworkSecret = value => crypto.createHash("sha256").update(String(value)).digest("hex");
+  const safeNetworkId = value => /^[A-Za-z0-9_-]{20,100}$/.test(String(value || ""));
+  const safeDeviceId = value => /^[A-Za-z0-9_-]{12,100}$/.test(String(value || ""));
+  const allowedControlActions = new Set(["DISPLAY_MODEL", "CLOSE_MODEL", "SET_MODE", "OPEN_VIEW", "SPEAK"]);
+
+  function secureEqualHex(left, right) {
+    const a = Buffer.from(String(left || ""), "hex");
+    const b = Buffer.from(String(right || ""), "hex");
+    return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
+  }
+
+  async function authenticateNetworkDevice(req, res) {
+    if (!networkStore || !networkStore.getNetworkDevice) {
+      res.status(503).json({ error: "ADVIS Device Network requires the configured Firestore connection." });
+      return null;
+    }
+    const networkId = String(req.body?.networkId || req.query?.networkId || "");
+    const deviceId = String(req.body?.deviceId || req.query?.deviceId || "");
+    const authorization = req.get("authorization") || "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+    if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || token.length < 32) {
+      res.status(401).json({ error: "Invalid device network credentials." });
+      return null;
+    }
+    const device = await networkStore.getNetworkDevice(networkId, deviceId);
+    if (!device || !secureEqualHex(device.tokenHash, hashNetworkSecret(token))) {
+      res.status(401).json({ error: "This ADVIS device is not registered on that network." });
+      return null;
+    }
+    return { networkId, deviceId, device };
+  }
+
+  app.post("/api/network/create", async (req, res) => {
+    try {
+      if (!networkStore?.createNetwork) return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
+      const { networkId, networkSecret, deviceId, name, platform } = req.body || {};
+      if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || String(networkSecret || "").length < 32) {
+        return res.status(400).json({ error: "A valid network identity and secret are required." });
+      }
+      const network = { id: networkId, secretHash: hashNetworkSecret(networkSecret), createdAt: Date.now(), protocolVersion: 1 };
+      await networkStore.createNetwork(network);
+      const deviceToken = crypto.randomBytes(32).toString("base64url");
+      const device = {
+        id: deviceId, name: String(name || "ADVIS Device").slice(0, 64),
+        platform: String(platform || "Unknown").slice(0, 80),
+        tokenHash: hashNetworkSecret(deviceToken), createdAt: Date.now(),
+        lastSeen: Date.now(), status: "ONLINE", capabilities: ["MESSAGE", "ADVIS_CONTROL"]
+      };
+      await networkStore.setNetworkDevice(networkId, device);
+      return res.status(201).json({ networkId, deviceId, deviceToken, devices: [{ ...device, tokenHash: undefined }] });
+    } catch (error) {
+      if (error.status === 409 || String(error.message).includes("ALREADY_EXISTS")) {
+        return res.status(409).json({ error: "That network identity already exists. Generate a new invite." });
+      }
+      console.error("[ADVIS Network] create:", error);
+      return res.status(503).json({ error: "Could not create the ADVIS network." });
+    }
+  });
+
+  app.post("/api/network/join", async (req, res) => {
+    try {
+      if (!networkStore?.getNetwork) return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
+      const { networkId, networkSecret, deviceId, name, platform } = req.body || {};
+      if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || String(networkSecret || "").length < 32) {
+        return res.status(400).json({ error: "The invitation is incomplete or invalid." });
+      }
+      const network = await networkStore.getNetwork(networkId);
+      if (!network || !secureEqualHex(network.secretHash, hashNetworkSecret(networkSecret))) {
+        return res.status(403).json({ error: "This ADVIS network invitation is invalid." });
+      }
+      const deviceToken = crypto.randomBytes(32).toString("base64url");
+      const device = {
+        id: deviceId, name: String(name || "ADVIS Device").slice(0, 64),
+        platform: String(platform || "Unknown").slice(0, 80),
+        tokenHash: hashNetworkSecret(deviceToken), createdAt: Date.now(),
+        lastSeen: Date.now(), status: "ONLINE", capabilities: ["MESSAGE", "ADVIS_CONTROL"]
+      };
+      await networkStore.setNetworkDevice(networkId, device);
+      return res.status(201).json({ networkId, deviceId, deviceToken });
+    } catch (error) {
+      console.error("[ADVIS Network] join:", error);
+      return res.status(503).json({ error: "Could not join the ADVIS network." });
+    }
+  });
+
+  app.post("/api/network/heartbeat", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      const nextDevice = {
+        ...auth.device,
+        name: String(req.body.name || auth.device.name || "ADVIS Device").slice(0, 64),
+        platform: String(req.body.platform || auth.device.platform || "Unknown").slice(0, 80),
+        lastSeen: Date.now(), status: "ONLINE"
+      };
+      await networkStore.setNetworkDevice(auth.networkId, nextDevice);
+      return res.json({ success: true, serverTime: Date.now() });
+    } catch (error) {
+      console.error("[ADVIS Network] heartbeat:", error);
+      return res.status(503).json({ error: "Device heartbeat failed." });
+    }
+  });
+
+  app.get("/api/network/devices", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      const devices = await networkStore.listNetworkDevices(auth.networkId);
+      const now = Date.now();
+      return res.json(devices.map(device => ({
+        id: device.id, name: device.name, platform: device.platform,
+        createdAt: device.createdAt, lastSeen: device.lastSeen,
+        status: now - Number(device.lastSeen || 0) < 35_000 ? "ONLINE" : "OFFLINE",
+        current: device.id === auth.deviceId
+      })));
+    } catch (error) {
+      console.error("[ADVIS Network] devices:", error);
+      return res.status(503).json({ error: "Could not retrieve connected devices." });
+    }
+  });
+
+  app.post("/api/network/commands", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      const { targetDeviceId, kind, payload, correlationId } = req.body || {};
+      if (!safeDeviceId(targetDeviceId) || !["PROMPT", "CONTROL", "PROMPT_REPLY"].includes(kind)) {
+        return res.status(400).json({ error: "Unsupported device command." });
+      }
+      if (kind === "CONTROL" && !allowedControlActions.has(payload?.action)) {
+        return res.status(400).json({ error: "That remote control action is not supported." });
+      }
+      if (targetDeviceId === auth.deviceId) return res.status(400).json({ error: "A device cannot send a remote command to itself." });
+      const target = await networkStore.getNetworkDevice(auth.networkId, targetDeviceId);
+      if (!target) return res.status(404).json({ error: "Target ADVIS device was not found." });
+      const command = {
+        id: "cmd_" + crypto.randomBytes(18).toString("hex"),
+        networkId: auth.networkId, fromDeviceId: auth.deviceId, fromDeviceName: auth.device.name,
+        targetDeviceId, kind, payload: payload || {}, correlationId: correlationId || null,
+        status: "PENDING", createdAt: Date.now(), expiresAt: Date.now() + 120_000
+      };
+      await networkStore.createNetworkCommand(auth.networkId, command);
+      return res.status(201).json({ id: command.id, status: command.status, createdAt: command.createdAt });
+    } catch (error) {
+      console.error("[ADVIS Network] command create:", error);
+      return res.status(503).json({ error: "Could not send the device command." });
+    }
+  });
+
+  app.get("/api/network/commands", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      const commands = await networkStore.listNetworkCommands(auth.networkId);
+      const now = Date.now();
+      return res.json(commands.filter(command =>
+        command.targetDeviceId === auth.deviceId &&
+        (command.status === "PENDING" || command.status === "DELIVERED") &&
+        Number(command.expiresAt || 0) > now
+      ).sort((a, b) => a.createdAt - b.createdAt).slice(0, 30));
+    } catch (error) {
+      console.error("[ADVIS Network] command poll:", error);
+      return res.status(503).json({ error: "Could not retrieve device commands." });
+    }
+  });
+
+  app.post("/api/network/commands/:id/ack", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      const command = await networkStore.getNetworkCommand(auth.networkId, req.params.id);
+      if (!command || command.targetDeviceId !== auth.deviceId) return res.status(404).json({ error: "Command not found for this device." });
+      const status = String(req.body.status || "");
+      if (!["DELIVERED", "COMPLETED", "REJECTED", "FAILED"].includes(status)) {
+        return res.status(400).json({ error: "Invalid command acknowledgement." });
+      }
+      await networkStore.createNetworkCommand(auth.networkId, {
+        ...command, status, updatedAt: Date.now(),
+        result: req.body.result ? String(req.body.result).slice(0, 2000) : null
+      });
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("[ADVIS Network] command ack:", error);
+      return res.status(503).json({ error: "Could not acknowledge the command." });
+    }
+  });
+
+
 
   let aiInstance = null;
 
