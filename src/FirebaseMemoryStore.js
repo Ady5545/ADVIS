@@ -194,7 +194,7 @@ function createFirebaseMemoryStore() {
   }
 
   async function saveState(state) {
-    const history = Array.isArray(state.history) ? state.history.slice(-200) : [];
+    const history = Array.isArray(state.history) ? state.history.slice(-2000) : [];
     await Promise.all([
       syncCollection(memoryCollection, state.memories || []),
       syncCollection(projectCollection, state.projects || []),
