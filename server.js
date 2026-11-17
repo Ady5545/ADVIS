@@ -532,7 +532,7 @@ async function createApp() {
         targetDeviceId, kind, payload: payload || {}, correlationId: correlationId || null,
         status: "PENDING", createdAt: Date.now(), expiresAt: Date.now() + 120_000
       };
-      await networkStore.createNetworkCommand(auth.networkId, command);
+      await networkStore.createNetworkCommand(auth.networkId, targetDeviceId, command);
       return res.status(201).json({ id: command.id, status: command.status, createdAt: command.createdAt });
     } catch (error) {
       console.error("[ADVIS Network] command create:", error);
@@ -544,7 +544,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
-      const commands = await networkStore.listNetworkCommands(auth.networkId);
+      const commands = await networkStore.listNetworkCommands(auth.networkId, auth.deviceId);
       const now = Date.now();
       return res.json(commands.filter(command =>
         command.targetDeviceId === auth.deviceId &&
@@ -561,13 +561,13 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
-      const command = await networkStore.getNetworkCommand(auth.networkId, req.params.id);
+      const command = await networkStore.getNetworkCommand(auth.networkId, auth.deviceId, req.params.id);
       if (!command || command.targetDeviceId !== auth.deviceId) return res.status(404).json({ error: "Command not found for this device." });
       const status = String(req.body.status || "");
       if (!["DELIVERED", "COMPLETED", "REJECTED", "FAILED"].includes(status)) {
         return res.status(400).json({ error: "Invalid command acknowledgement." });
       }
-      await networkStore.createNetworkCommand(auth.networkId, {
+      await networkStore.createNetworkCommand(auth.networkId, auth.deviceId, {
         ...command, status, updatedAt: Date.now(),
         result: req.body.result ? String(req.body.result).slice(0, 2000) : null
       });
