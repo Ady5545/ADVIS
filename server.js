@@ -6,6 +6,8 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const { processButlerTurn } = require("./ButlerEngine");
+const crypto = require("crypto");
+const { createFirebaseMemoryStore } = require("./src/FirebaseMemoryStore");
 
 async function createApp() {
   const app = express();
@@ -89,6 +91,139 @@ async function createApp() {
     console.error("Failed to load data:", e);
   }
 
+  const OWNER_HISTORY_KEY = "primary";
+  const isLocalDevelopment = !process.env.VERCEL && process.env.NODE_ENV !== "production";
+  let firebaseMemoryStore = null;
+  let firebaseSetupError = null;
+  try {
+    firebaseMemoryStore = createFirebaseMemoryStore();
+  } catch (error) {
+    firebaseSetupError = error;
+    console.error("[ADVIS Firebase] Configuration error:", error.message);
+  }
+
+  let firebaseWriteChain = Promise.resolve();
+
+  function ownerPairingConfigured() {
+    return !!(
+      firebaseMemoryStore &&
+      process.env.ADVIS_OWNER_PAIRING_CODE &&
+      process.env.ADVIS_OWNER_TOKEN_SECRET &&
+      process.env.ADVIS_OWNER_TOKEN_SECRET.length >= 32
+    );
+  }
+
+  function readCookie(req, name) {
+    const cookieHeader = req.headers.cookie || "";
+    for (const part of cookieHeader.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator < 0) continue;
+      if (part.slice(0, separator).trim() === name) {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      }
+    }
+    return "";
+  }
+
+  function safeStringEqual(left, right) {
+    const a = Buffer.from(String(left || ""), "utf8");
+    const b = Buffer.from(String(right || ""), "utf8");
+    return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
+  }
+
+  function issueOwnerToken() {
+    const payload = Buffer.from(JSON.stringify({
+      version: 1,
+      owner: OWNER_HISTORY_KEY,
+      expiresAt: Date.now() + (365 * 24 * 60 * 60 * 1000)
+    })).toString("base64url");
+    const signature = crypto.createHmac("sha256", process.env.ADVIS_OWNER_TOKEN_SECRET)
+      .update(payload).digest("base64url");
+    return payload + "." + signature;
+  }
+
+  function hasOwnerAccess(req) {
+    if (isLocalDevelopment) return true;
+    if (!ownerPairingConfigured()) return false;
+    const token = readCookie(req, "advis_owner");
+    const separator = token.lastIndexOf(".");
+    if (separator <= 0) return false;
+    const payload = token.slice(0, separator);
+    const suppliedSignature = token.slice(separator + 1);
+    const expectedSignature = crypto.createHmac("sha256", process.env.ADVIS_OWNER_TOKEN_SECRET)
+      .update(payload).digest("base64url");
+    if (!safeStringEqual(suppliedSignature, expectedSignature)) return false;
+    try {
+      const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+      return decoded.version === 1 &&
+        decoded.owner === OWNER_HISTORY_KEY &&
+        Number(decoded.expiresAt) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function requireOwnerDevice(req, res, next) {
+    if (isLocalDevelopment) return next();
+    if (!ownerPairingConfigured()) {
+      return res.status(503).json({
+        error: "ADVIS private cloud memory is not configured yet.",
+        status: firebaseSetupError ? "firebase_configuration_error" : "owner_pairing_not_configured"
+      });
+    }
+    if (!hasOwnerAccess(req)) {
+      return res.status(401).json({
+        error: "This device has not been paired with the private ADVIS core.",
+        status: "device_pairing_required"
+      });
+    }
+    next();
+  }
+
+  async function loadCloudState() {
+    if (!firebaseMemoryStore) return false;
+    const remote = await firebaseMemoryStore.loadState();
+    const remoteHasData = remote.memories.length || remote.projects.length || remote.history.length;
+    const oldLocalHistory = Object.values(chatHistories || {}).flat()
+      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const localHasData = advisMemories.length || advisProjects.length || oldLocalHistory.length;
+
+    if (!remoteHasData && localHasData) {
+      const migratedHistory = oldLocalHistory.slice(-200);
+      await firebaseMemoryStore.saveState({
+        memories: advisMemories,
+        projects: advisProjects,
+        history: migratedHistory
+      });
+      chatHistories = { [OWNER_HISTORY_KEY]: migratedHistory };
+    } else {
+      advisMemories = remote.memories || [];
+      advisProjects = remote.projects || [];
+      chatHistories = { [OWNER_HISTORY_KEY]: (remote.history || []).slice(-200) };
+    }
+    return true;
+  }
+
+  async function refreshCloudState(req, res, next) {
+    if (!firebaseMemoryStore) {
+      if (isLocalDevelopment) return next();
+      return res.status(503).json({
+        error: "Firebase Firestore is not connected. Add the private Firebase service-account environment variable to the ADVIS Vercel project.",
+        status: "cloud_memory_unavailable"
+      });
+    }
+    try {
+      await loadCloudState();
+      next();
+    } catch (error) {
+      console.error("[ADVIS Firebase] Failed to load owner state:", error);
+      res.status(503).json({
+        error: "ADVIS could not reach its private memory store.",
+        status: "cloud_memory_unavailable"
+      });
+    }
+  }
+
   function saveData() {
     try {
       fs.writeFileSync(HISTORY_FILE, JSON.stringify(chatHistories, null, 2), "utf-8");
@@ -96,58 +231,146 @@ async function createApp() {
       fs.writeFileSync(ADVIS_MEMORIES_FILE, JSON.stringify(advisMemories, null, 2), "utf-8");
       fs.writeFileSync(ADVIS_PROJECTS_FILE, JSON.stringify(advisProjects, null, 2), "utf-8");
     } catch (e) {
-      console.error("Failed to save data:", e);
+      console.error("Failed to save local data:", e);
     }
+
+    if (!firebaseMemoryStore) return Promise.resolve();
+    const snapshot = {
+      memories: advisMemories.map(memory => ({ ...memory })),
+      projects: advisProjects.map(project => ({ ...project })),
+      history: (chatHistories[OWNER_HISTORY_KEY] || []).slice(-200)
+    };
+    const write = firebaseWriteChain.then(() => firebaseMemoryStore.saveState(snapshot));
+    firebaseWriteChain = write.catch(error => {
+      console.error("[ADVIS Firebase] Failed to persist owner state:", error);
+    });
+    return write;
   }
+
+  // A one-time pairing code authorizes a browser/device. There is no account
+  // list, email/password form, or recurring sign-in experience.
+  const ownerPairAttempts = new Map();
+  app.get("/api/owner/status", (req, res) => {
+    const configured = isLocalDevelopment || ownerPairingConfigured();
+    res.json({
+      configured,
+      paired: isLocalDevelopment || (configured && hasOwnerAccess(req)),
+      firebaseReady: !!firebaseMemoryStore,
+      setupError: firebaseSetupError ? "invalid_firebase_service_account" : null,
+      mode: isLocalDevelopment ? "local" : "single_owner_device_pairing"
+    });
+  });
+
+  app.post("/api/owner/pair", (req, res) => {
+    if (isLocalDevelopment) return res.json({ success: true, paired: true });
+    if (!ownerPairingConfigured()) {
+      return res.status(503).json({
+        error: "Firebase memory and owner-pairing environment variables must be configured first."
+      });
+    }
+    const clientKey = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+    const now = Date.now();
+    const recentAttempts = (ownerPairAttempts.get(clientKey) || []).filter(timestamp => now - timestamp < 10 * 60 * 1000);
+    if (recentAttempts.length >= 8) {
+      ownerPairAttempts.set(clientKey, recentAttempts);
+      return res.status(429).json({ error: "Too many pairing attempts. Try again later." });
+    }
+    recentAttempts.push(now);
+    ownerPairAttempts.set(clientKey, recentAttempts);
+
+    const suppliedCode = String(req.body?.pairingCode || "");
+    if (!safeStringEqual(suppliedCode, process.env.ADVIS_OWNER_PAIRING_CODE)) {
+      return res.status(401).json({ error: "That device pairing code is not valid." });
+    }
+    ownerPairAttempts.delete(clientKey);
+    const token = issueOwnerToken();
+    res.setHeader("Set-Cookie",
+      "advis_owner=" + encodeURIComponent(token) +
+      "; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Strict");
+    return res.json({ success: true, paired: true });
+  });
+
+  app.post("/api/owner/unpair", (req, res) => {
+    res.setHeader("Set-Cookie", "advis_owner=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict");
+    res.json({ success: true, paired: false });
+  });
+
+  // Personal data and conversations always resolve to the same private owner.
+  app.use(["/api/memory", "/api/projects", "/api/history", "/api/advis", "/api/jarvis"],
+    requireOwnerDevice, refreshCloudState);
+
+
 
   let aiInstance = null;
 
   function getRelevantMemories(userMessage, activeProjectId) {
-      if (advisMemories.length === 0) return '';
-      
-      const words = userMessage.toLowerCase().split(' ').filter(w => w.length > 3);
-      
-      // Score each memory
-      const scored = advisMemories.map(m => {
-          let score = 0;
-          const memStr = (m.content + " " + m.tags.join(" ")).toLowerCase();
-          
-          // Semantic overlap
-          words.forEach(w => {
-              if (memStr.includes(w)) score += 2;
-          });
-          
-          // Project relevance
-          if (activeProjectId && m.projectId === activeProjectId) score += 3;
-          if (!activeProjectId && !m.projectId) score += 1;
-          
-          // Importance
-          score += (m.importance || 5) * 0.2;
-          
-          // Pinned
-          if (m.pinned) score += 5;
-          
-          // Recency (boost recent memories slightly)
-          const ageHours = (Date.now() - m.updatedAt) / (1000 * 60 * 60);
-          if (ageHours < 24) score += 1;
-          
-          return { memory: m, score };
-      });
-      
-      // Filter out low scores unless pinned or project exact match
-      const relevant = scored.filter(s => s.score > 2 || s.memory.pinned || (activeProjectId && s.memory.projectId === activeProjectId));
-      
-      // Sort by score descending
-      relevant.sort((a, b) => b.score - a.score);
-      
-      // Take top 10 to avoid context bloat
-      const topMemories = relevant.slice(0, 10).map(s => s.memory);
-      
-      if (topMemories.length > 0) {
-          return '\n\n[ADVIS MEMORY CONTEXT]:\n' + topMemories.map(m => `- [${m.category}] ${m.content}`).join('\n');
+    if (!advisMemories.length) return "";
+    const stopWords = new Set(["the", "and", "for", "with", "that", "this", "have", "from", "about", "into", "what", "when", "where", "your", "you", "are", "was", "were", "does", "will", "would", "could", "should", "please", "make", "want"]);
+    const words = String(userMessage || "").toLowerCase().match(/[a-z0-9_-]{3,}/g) || [];
+    const queryTokens = Array.from(new Set(words.filter(word => !stopWords.has(word))));
+    const currentProject = activeProjectId || null;
+
+    const scored = advisMemories.map(memory => {
+      const tags = Array.isArray(memory.tags) ? memory.tags : [];
+      const memoryText = (String(memory.content || "") + " " + tags.join(" ")).toLowerCase();
+      const memoryTokens = new Set(memoryText.match(/[a-z0-9_-]{3,}/g) || []);
+      let overlap = 0;
+      for (const token of queryTokens) {
+        if (memoryTokens.has(token)) overlap += 1;
+        else if (token.length >= 5 && Array.from(memoryTokens).some(candidate => candidate.includes(token) || token.includes(candidate))) overlap += 0.5;
       }
-      return '';
+
+      const ageDays = Math.max(0, (Date.now() - Number(memory.updatedAt || memory.createdAt || Date.now())) / 86400000);
+      const importance = Math.max(1, Math.min(10, Number(memory.importance || 5)));
+      let score = overlap * 3 + importance * 0.45 + (memory.pinned ? 9 : 0);
+      if (currentProject && memory.projectId === currentProject) score += 8;
+      if (!memory.projectId) score += 1.5;
+      if (ageDays < 7) score += 1.5;
+      if (["PREFERENCE", "PERSONAL", "GOAL"].includes(memory.category)) score += 1.25;
+      return { memory, score };
+    });
+
+    const pinned = scored.filter(item => item.memory.pinned);
+    const globalProfile = scored
+      .filter(item => !item.memory.projectId && ["PERSONAL", "PREFERENCE", "GOAL", "WORKSPACE"].includes(item.memory.category))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12);
+    const projectContext = currentProject
+      ? scored.filter(item => item.memory.projectId === currentProject).sort((a, b) => b.score - a.score).slice(0, 16)
+      : [];
+    const queryRelevant = scored
+      .filter(item => item.score >= 3.25)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 24);
+
+    const selected = [];
+    const seen = new Set();
+    for (const item of [...pinned, ...globalProfile, ...projectContext, ...queryRelevant]) {
+      if (seen.has(item.memory.id)) continue;
+      seen.add(item.memory.id);
+      selected.push(item.memory);
+    }
+
+    let usedChars = 0;
+    const memoryLines = [];
+    for (const memory of selected) {
+      const line = "- [" + (memory.category || "GENERAL") +
+        "; importance " + (memory.importance || 5) +
+        (memory.pinned ? "; pinned" : "") + "] " +
+        String(memory.content || "").slice(0, 900);
+      if (usedChars + line.length > 14000) continue;
+      memoryLines.push(line);
+      usedChars += line.length;
+      if (memoryLines.length >= 40) break;
+    }
+
+    if (!memoryLines.length) return "";
+    return "\n\n[ADVIS LONG-TERM OWNER MEMORY — PRIVATE CONTEXT]\n" +
+      "Use these durable facts as ongoing context across sessions and devices. Prefer current, project-specific facts over old conflicting facts. Never invent missing details.\n" +
+      memoryLines.join("\n");
   }
+
+
   function getGeminiClient() {
     if (aiInstance) return aiInstance;
     const apiKey = process.env.GEMINI_API_KEY;
@@ -171,7 +394,8 @@ async function createApp() {
     const client = getGeminiClient();
     if (!client) return;
     
-    // Quick heuristic: Skip very short non-informational messages or greetings
+    // Quick heuristic: skip greetings and fragments, but keep short explicit preferences/corrections.
+
     const lower = userMessage.toLowerCase();
     const isGreeting = ["hello", "hi", "hey", "good morning", "good evening"].includes(lower.trim());
     
@@ -180,14 +404,15 @@ async function createApp() {
         return; 
     }
     
-    if (userMessage.split(' ').length < 3 && !lower.includes("use") && !lower.includes("prefer") && !lower.includes("project")) {
-        return; // Too short to be a meaningful persistent memory
+    const explicitPreferenceOrCorrection = /\b(use|prefer|always|never|keep|avoid|rather than|instead of|from now on|remember|call me|do not|don't|dont|change to|switch to|no longer|not)\b/i.test(userMessage);
+    if (userMessage.split(/\s+/).filter(Boolean).length < 3 && !explicitPreferenceOrCorrection && !lower.includes("project")) {
+        return; // Skip fragments, but preserve compact preferences and corrections.
     }
     if (isGreeting) return;
 
     try {
       // Gather relevant existing memories to let the LLM detect duplicates/contradictions
-      let existingContext = advisMemories.map(m => `ID: ${m.id} | Project: ${m.projectId || 'GLOBAL'} | Category: ${m.category} | Content: ${m.content}`).join('\n');
+      let existingContext = advisMemories.slice(-160).map(m => `ID: ${m.id} | Project: ${m.projectId || 'GLOBAL'} | Category: ${m.category} | Content: ${m.content}`).join('\n');
       if (!existingContext) existingContext = "NONE";
 
       const prompt = `
@@ -198,9 +423,13 @@ Active Project ID: ${activeProjectId || 'NONE'}
 
 DO SAVE:
 - Stable preferences, workflow preferences, architecture decisions, hardware specs, recurring goals.
+- Explicit corrections, changed technical choices, project commitments, and updated facts that supersede prior memories.
+- Important context the owner expects ADVIS to retain across browsers, devices, tabs and conversations.
+- Short statements when they clearly express a lasting preference or correction (for example, "Use Firebase, not Supabase").
 
 DO NOT SAVE (Ignore):
 - Casual chatter, jokes, transient emotions ("I'm tired", "That's cool"), temporary debugging states, general questions.
+- Passwords, API keys, service-account credentials, pairing codes, or other authentication secrets.
 
 If you decide to save, review the existing memories below. If the new information conflicts with or updates an existing memory, you must UPDATE the existing one instead of creating a duplicate. If it's identical to an existing memory, IGNORE it.
 
@@ -253,7 +482,7 @@ User Message: "${userMessage}"
                  if (evalData.tags && evalData.tags.length > 0) {
                      advisMemories[existingIdx].tags = Array.from(new Set([...advisMemories[existingIdx].tags, ...evalData.tags]));
                  }
-                 saveData();
+                 await saveData();
                  return;
              }
          }
@@ -273,7 +502,7 @@ User Message: "${userMessage}"
            metadata: { confidence: evalData.confidence }
          };
          advisMemories.push(newMemory);
-         saveData();
+         await saveData();
          console.log("[MEMORY_EVENT] MEMORY_CREATED:", newMemory.id);
       }
 
@@ -285,103 +514,116 @@ User Message: "${userMessage}"
 
 
 
-  // --- ADVIS MEMORY SERVICE ---
-  const { v4: uuidv4 } = require('crypto');
-  
+  // --- ADVIS PRIVATE MEMORY AND PROJECT SERVICE ---
   app.get("/api/memory", (req, res) => {
-    const { projectId } = req.query;
-    if (projectId) {
-      res.json(advisMemories.filter(m => m.projectId === projectId));
-    } else {
-      res.json(advisMemories);
-    }
+    const projectId = req.query.projectId;
+    const records = projectId ? advisMemories.filter(m => m.projectId === projectId) : advisMemories;
+    res.json(records);
   });
 
-  app.post("/api/memory", (req, res) => {
+  app.post("/api/memory", async (req, res) => {
     const { category, content, source, importance, tags, projectId, pinned, metadata } = req.body;
+    if (!String(content || "").trim()) return res.status(400).json({ error: "Memory content is required." });
     const newMemory = {
-      id: "mem_" + Date.now() + "_" + Math.floor(Math.random()*1000),
-      category: category || 'PERSONAL',
-      content,
-      source: source || 'USER',
+      id: "mem_" + Date.now() + "_" + crypto.randomBytes(5).toString("hex"),
+      category: category || "PERSONAL",
+      content: String(content).trim(),
+      source: source || "USER",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      importance: importance || 5,
-      tags: tags || [],
+      importance: Math.max(1, Math.min(10, Number(importance) || 5)),
+      tags: Array.isArray(tags) ? tags : [],
       projectId: projectId || null,
-      pinned: pinned || false,
+      pinned: !!pinned,
       metadata: metadata || {}
     };
     advisMemories.push(newMemory);
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Memory could not be saved to Firebase." }); }
     res.json(newMemory);
   });
 
-  app.put("/api/memory/:id", (req, res) => {
+  app.put("/api/memory/:id", async (req, res) => {
     const memIdx = advisMemories.findIndex(m => m.id === req.params.id);
-    if (memIdx === -1) return res.status(404).json({error: "Not found"});
+    if (memIdx === -1) return res.status(404).json({ error: "Not found" });
     const updated = { ...advisMemories[memIdx], ...req.body, updatedAt: Date.now() };
     advisMemories[memIdx] = updated;
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Memory update could not be saved to Firebase." }); }
     res.json(updated);
   });
 
-  app.delete("/api/memory/:id", (req, res) => {
-    advisMemories = advisMemories.filter(m => m.id !== req.params.id);
-    saveData();
+  app.delete("/api/memory/:id", async (req, res) => {
+    const existing = advisMemories.find(memory => memory.id === req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    advisMemories = advisMemories.filter(memory => memory.id !== req.params.id);
+    try {
+      if (firebaseMemoryStore) await firebaseMemoryStore.deleteMemory(req.params.id);
+      await saveData();
+    } catch (error) {
+      advisMemories.push(existing);
+      return res.status(503).json({ error: "Memory deletion could not be saved to Firebase." });
+    }
     res.json({ success: true });
   });
 
   app.get("/api/memory/search", (req, res) => {
-    const q = (req.query.q || '').toLowerCase();
-    const pid = req.query.projectId;
-    let results = advisMemories.filter(m => m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
-    if (pid) results = results.filter(m => m.projectId === pid);
+    const q = String(req.query.q || "").toLowerCase();
+    const projectId = req.query.projectId;
+    let results = advisMemories.filter(m =>
+      String(m.content || "").toLowerCase().includes(q) ||
+      (Array.isArray(m.tags) && m.tags.some(tag => String(tag).toLowerCase().includes(q)))
+    );
+    if (projectId) results = results.filter(m => m.projectId === projectId);
     res.json(results);
   });
 
-  app.get("/api/projects", (req, res) => {
-    res.json(advisProjects);
-  });
+  app.get("/api/projects", (_req, res) => res.json(advisProjects));
 
-  app.post("/api/projects", (req, res) => {
+  app.post("/api/projects", async (req, res) => {
     const { name, description, status, tags } = req.body;
+    if (!String(name || "").trim()) return res.status(400).json({ error: "Project name is required." });
     const newProject = {
-      id: "proj_" + Date.now() + "_" + Math.floor(Math.random()*1000),
-      name,
-      description,
-      status: status || 'ACTIVE',
+      id: "proj_" + Date.now() + "_" + crypto.randomBytes(5).toString("hex"),
+      name: String(name).trim(),
+      description: description || "",
+      status: status || "ACTIVE",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      tags: tags || [],
+      tags: Array.isArray(tags) ? tags : [],
       associatedMemories: []
     };
     advisProjects.push(newProject);
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Project could not be saved to Firebase." }); }
     res.json(newProject);
   });
 
-  app.put("/api/projects/:id", (req, res) => {
-    const pIdx = advisProjects.findIndex(p => p.id === req.params.id);
-    if (pIdx === -1) return res.status(404).json({error: "Not found"});
+  app.put("/api/projects/:id", async (req, res) => {
+    const pIdx = advisProjects.findIndex(project => project.id === req.params.id);
+    if (pIdx === -1) return res.status(404).json({ error: "Not found" });
     const updated = { ...advisProjects[pIdx], ...req.body, updatedAt: Date.now() };
     advisProjects[pIdx] = updated;
-    saveData();
+    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Project update could not be saved to Firebase." }); }
     res.json(updated);
   });
 
-  app.delete("/api/projects/:id", (req, res) => {
-    advisProjects = advisProjects.filter(p => p.id !== req.params.id);
-    saveData();
+  app.delete("/api/projects/:id", async (req, res) => {
+    const existing = advisProjects.find(project => project.id === req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    advisProjects = advisProjects.filter(project => project.id !== req.params.id);
+    try {
+      if (firebaseMemoryStore) await firebaseMemoryStore.deleteProject(req.params.id);
+      await saveData();
+    } catch (error) {
+      advisProjects.push(existing);
+      return res.status(503).json({ error: "Project deletion could not be saved to Firebase." });
+    }
     res.json({ success: true });
   });
 
   app.get("/api/history", (req, res) => {
-    const deviceId = req.query.deviceId || 'default';
-    res.json(chatHistories[deviceId] || []);
+    const historyKey = isLocalDevelopment ? (req.query.deviceId || "default") : OWNER_HISTORY_KEY;
+    res.json(chatHistories[historyKey] || []);
   });
 
-  
   const responseCache = {};
 
   // AGENT KNOWLEDGE BASES
@@ -604,18 +846,24 @@ Output JSON only, in this exact format:
            metadata: {}
          };
          advisMemories.push(newMemory);
-         saveData();
-         return `I have saved that to my memory banks, Sir. (Category: ${intent.category})`;
+         await saveData();
+         return "Saved to my memory.";
       } 
       else if (intent.action === "DELETE") {
          // Simple exact or partial match delete
          const idx = advisMemories.findIndex(m => m.content.toLowerCase().includes(intent.content.toLowerCase()) || intent.content.toLowerCase().includes(m.content.toLowerCase()));
          if (idx !== -1) {
-            advisMemories.splice(idx, 1);
-            saveData();
-            return "I have purged that information from my memory banks, Sir.";
+            const removed = advisMemories.splice(idx, 1)[0];
+            try {
+              if (firebaseMemoryStore) await firebaseMemoryStore.deleteMemory(removed.id);
+              await saveData();
+            } catch (error) {
+              advisMemories.splice(idx, 0, removed);
+              throw error;
+            }
+            return "I've removed that from my memory.";
          }
-         return "I could not find a matching memory to delete, Sir.";
+         return "I couldn't find a matching memory to remove.";
       }
       else if (intent.action === "RETRIEVE") {
          let results = advisMemories.filter(m => m.content.toLowerCase().includes(intent.content.toLowerCase()) || m.tags.some(t => intent.content.toLowerCase().includes(t.toLowerCase())));
@@ -627,12 +875,12 @@ Output JSON only, in this exact format:
                results = advisMemories.slice(-5);
             }
          }
-         if (results.length === 0) return "I have no specific memories regarding that, Sir.";
+         if (results.length === 0) return "I don't have a specific memory of that.";
          return `Based on my memory databanks:\n${results.map((m, i) => `${i+1}. ${m.content}`).join('\n')}`;
       }
     } catch (e) {
       console.error(e);
-      return "I encountered an error accessing my memory banks, Sir.";
+      return "I couldn't access my memory store just now.";
     }
     return "Memory operation completed.";
   }
@@ -889,7 +1137,7 @@ Output JSON only, in this exact format:
     const { 
       message, 
       mode, 
-      deviceId = 'default', 
+      deviceId: _clientDeviceId = 'default', 
       image, 
       currentSpatialObject, 
       selectedComponentId, 
@@ -900,9 +1148,8 @@ Output JSON only, in this exact format:
 
     if (!message) return res.status(400).json({ error: "Protocol violation: Message payload is empty." });
 
-    if (!chatHistories[deviceId]) {
-      chatHistories[deviceId] = [];
-    }
+    const deviceId = isLocalDevelopment ? _clientDeviceId : OWNER_HISTORY_KEY;
+    if (!chatHistories[deviceId]) chatHistories[deviceId] = [];
 
     const butlerContext = clientButlerContext || {
       activeProjectId,
@@ -924,7 +1171,7 @@ Output JSON only, in this exact format:
         advisProjects,
         chatHistories,
         saveData,
-        evaluateAndStoreMemory,
+        getRelevantMemories,
         getGeminiClient,
         SPATIAL_REGISTRY,
         MODEL_SYNONYMS,
@@ -938,6 +1185,9 @@ Output JSON only, in this exact format:
         masterBrainRoute
       });
 
+      // Memory extraction is part of the turn's durable write path, not a fire-and-forget task.
+      await evaluateAndStoreMemory(message, butlerContext ? butlerContext.activeProjectId : null);
+      await saveData();
       return res.json(result);
     } catch (err) {
       console.error("[Butler API] Core Exception:", err);
@@ -952,7 +1202,7 @@ Output JSON only, in this exact format:
   // Browser clients retain their existing endpoint. Android uses the protected
   // route and sends the mobile token as an Authorization: Bearer header.
   app.post(["/api/advis", "/api/jarvis"], handleAdvisRequest);
-  app.post("/api/mobile/advis", requireMobileToken, handleAdvisRequest);
+  app.post("/api/mobile/advis", requireMobileToken, refreshCloudState, handleAdvisRequest);
 
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = require("vite");

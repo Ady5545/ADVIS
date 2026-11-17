@@ -110,6 +110,21 @@ export default function App() {
   }, [themeColor]);
 
   useEffect(() => {
+    let active = true;
+    fetch("/api/owner/status", { credentials: "same-origin" })
+      .then(response => response.json())
+      .then(data => {
+        if (!active) return;
+        if (!data.configured) setOwnerAccessStatus("SETUP_REQUIRED");
+        else setOwnerAccessStatus(data.paired ? "READY" : "PAIR_REQUIRED");
+      })
+      .catch(() => {
+        if (active) setOwnerAccessStatus("SETUP_REQUIRED");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (soundEnabled) {
       playStateTransitionSound(systemState);
     }
@@ -135,6 +150,10 @@ export default function App() {
   };
 
   const [showMemoryManager, setShowMemoryManager] = useState<boolean>(false);
+  const [ownerAccessStatus, setOwnerAccessStatus] = useState<"CHECKING" | "READY" | "PAIR_REQUIRED" | "SETUP_REQUIRED">("CHECKING");
+  const [ownerPairingCode, setOwnerPairingCode] = useState("");
+  const [ownerPairError, setOwnerPairError] = useState("");
+  const [isPairingOwner, setIsPairingOwner] = useState(false);
   const handTracking = useHandTracking(cvEnabled);
   
   // Spatial Object Engine State Management
@@ -485,6 +504,32 @@ export default function App() {
     } catch (e) {
       console.warn("fetch history warn:", (e as Error).message);
       setMessages([{ role: 'assistant', content: 'Welcome online, Sir. (Offline Mode Active)', timestamp: Date.now() }]);
+    }
+  };
+
+  const pairOwnerDevice = async () => {
+    if (!ownerPairingCode.trim() || isPairingOwner) return;
+    setIsPairingOwner(true);
+    setOwnerPairError("");
+    try {
+      const response = await fetch("/api/owner/pair", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairingCode: ownerPairingCode.trim() })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "This device could not be paired.");
+      }
+      setOwnerPairingCode("");
+      setOwnerAccessStatus("READY");
+      const deviceId = localStorage.getItem("advis_device_id") || "primary";
+      await fetchHistory(deviceId);
+    } catch (error) {
+      setOwnerPairError((error as Error).message || "Device pairing failed.");
+    } finally {
+      setIsPairingOwner(false);
     }
   };
 
@@ -866,11 +911,62 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <GestureProvider handTracking={handTracking} isSpatial={!!currentSpatialObject || !!activeLearningSession}>
-        {/* TEMPORARY DIAGNOSTIC MARKER REQUIRED BY USER REQUEST */}
-        <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 99999, background: '#00ff00', color: '#000000', padding: '8px 16px', fontWeight: 'bold', fontSize: '16px', fontFamily: 'monospace', borderBottomRightRadius: '8px', boxShadow: '0 0 10px rgba(0,255,0,0.8)' }}>
-          ADVIS R3F DIAGNOSTIC - STATE: {systemState}
-        </div>
-
+        {ownerAccessStatus !== "READY" && (
+          <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-[#02070d] px-5">
+            <div className="pointer-events-auto w-full max-w-lg rounded-2xl border border-cyan-400/20 bg-[#07131e]/95 p-7 shadow-[0_0_80px_rgba(0,180,220,0.12)] backdrop-blur-xl">
+              <div className="mb-6 flex items-center gap-3">
+                <div className="h-12 w-12 rounded-full border border-cyan-300/40 bg-cyan-400/10 shadow-[0_0_28px_rgba(34,211,238,0.18)]" />
+                <div>
+                  <div className="text-xs tracking-[0.34em] text-cyan-300/70">PRIVATE INTELLIGENCE CORE</div>
+                  <div className="mt-1 text-2xl font-semibold tracking-[0.12em] text-white">A.D.V.I.S.</div>
+                </div>
+              </div>
+              {ownerAccessStatus === "CHECKING" ? (
+                <div className="py-8 text-sm tracking-[0.18em] text-cyan-100/70">VERIFYING CORE CONNECTION…</div>
+              ) : ownerAccessStatus === "SETUP_REQUIRED" ? (
+                <div className="space-y-4">
+                  <div className="text-lg text-white">Private memory connection required</div>
+                  <p className="text-sm leading-6 text-slate-300/80">
+                    This deployment is waiting for its private Firebase and owner-pairing configuration. No account or email sign-in is used.
+                  </p>
+                  <div className="rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs leading-6 text-cyan-100/80">
+                    FIREBASE_SERVICE_ACCOUNT_JSON<br />
+                    ADVIS_OWNER_PAIRING_CODE<br />
+                    ADVIS_OWNER_TOKEN_SECRET<br />
+                    <span className="text-slate-400">FIREBASE_PROJECT_ID (optional)</span>
+                  </div>
+                  <p className="text-xs leading-5 text-slate-400">
+                    Add these as server-side environment variables in the Vercel project, then redeploy. Keep the service-account JSON and pairing secrets private.
+                  </p>
+                </div>
+              ) : (
+                <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void pairOwnerDevice(); }}>
+                  <div className="text-lg text-white">Pair this device</div>
+                  <p className="text-sm leading-6 text-slate-300/80">
+                    Enter your private owner code once on this browser. ADVIS will then use the same memory and conversation context as your other paired devices.
+                  </p>
+                  <input
+                    type="password"
+                    value={ownerPairingCode}
+                    onChange={(event) => setOwnerPairingCode(event.target.value)}
+                    autoComplete="off"
+                    placeholder="Private device-pairing code"
+                    className="w-full rounded-lg border border-cyan-300/20 bg-black/40 px-4 py-3 text-sm tracking-widest text-white outline-none transition focus:border-cyan-300/60"
+                  />
+                  {ownerPairError && <p className="text-sm text-rose-300">{ownerPairError}</p>}
+                  <button
+                    type="submit"
+                    disabled={!ownerPairingCode.trim() || isPairingOwner}
+                    className="w-full rounded-lg border border-cyan-300/40 bg-cyan-400/10 px-4 py-3 text-sm font-semibold tracking-[0.2em] text-cyan-100 transition hover:bg-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {isPairingOwner ? "PAIRING DEVICE…" : "PAIR THIS DEVICE"}
+                  </button>
+                  <p className="text-xs text-slate-500">One-time device authorisation. No account, email address or recurring sign-in.</p>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
         <div ref={containerRef} className="relative w-screen h-screen overflow-hidden bg-black text-white font-sans selection:bg-cyan-500/30">
         <div 
           className="pointer-events-none absolute inset-0 z-0 opacity-30 transition-opacity duration-300"
