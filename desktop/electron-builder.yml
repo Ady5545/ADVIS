@@ -1,0 +1,25 @@
+appId: com.advis.desktopagent
+productName: ADVIS Desktop Agent
+directories:
+  output: release
+extraMetadata:
+  main: desktop/main.cjs
+files:
+  - desktop/**/*
+  - package.json
+extraResources:
+  - from: desktop/native
+    to: native
+mac:
+  category: public.app-category.utilities
+  target:
+    - dmg
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+linux:
+  target:
+    - AppImage
