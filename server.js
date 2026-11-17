@@ -249,6 +249,7 @@ async function createApp() {
 
   // A one-time pairing code authorizes a browser/device. There is no account
   // list, email/password form, or recurring sign-in experience.
+  const ownerPairAttempts = new Map();
   app.get("/api/owner/status", (req, res) => {
     const configured = isLocalDevelopment || ownerPairingConfigured();
     res.json({
@@ -267,10 +268,21 @@ async function createApp() {
         error: "Firebase memory and owner-pairing environment variables must be configured first."
       });
     }
+    const clientKey = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+    const now = Date.now();
+    const recentAttempts = (ownerPairAttempts.get(clientKey) || []).filter(timestamp => now - timestamp < 10 * 60 * 1000);
+    if (recentAttempts.length >= 8) {
+      ownerPairAttempts.set(clientKey, recentAttempts);
+      return res.status(429).json({ error: "Too many pairing attempts. Try again later." });
+    }
+    recentAttempts.push(now);
+    ownerPairAttempts.set(clientKey, recentAttempts);
+
     const suppliedCode = String(req.body?.pairingCode || "");
     if (!safeStringEqual(suppliedCode, process.env.ADVIS_OWNER_PAIRING_CODE)) {
       return res.status(401).json({ error: "That device pairing code is not valid." });
     }
+    ownerPairAttempts.delete(clientKey);
     const token = issueOwnerToken();
     res.setHeader("Set-Cookie",
       "advis_owner=" + encodeURIComponent(token) +
@@ -410,9 +422,13 @@ Active Project ID: ${activeProjectId || 'NONE'}
 
 DO SAVE:
 - Stable preferences, workflow preferences, architecture decisions, hardware specs, recurring goals.
+- Explicit corrections, changed technical choices, project commitments, and updated facts that supersede prior memories.
+- Important context the owner expects ADVIS to retain across browsers, devices, tabs and conversations.
+- Short statements when they clearly express a lasting preference or correction (for example, "Use Firebase, not Supabase").
 
 DO NOT SAVE (Ignore):
 - Casual chatter, jokes, transient emotions ("I'm tired", "That's cool"), temporary debugging states, general questions.
+- Passwords, API keys, service-account credentials, pairing codes, or other authentication secrets.
 
 If you decide to save, review the existing memories below. If the new information conflicts with or updates an existing memory, you must UPDATE the existing one instead of creating a duplicate. If it's identical to an existing memory, IGNORE it.
 
@@ -535,8 +551,16 @@ User Message: "${userMessage}"
   });
 
   app.delete("/api/memory/:id", async (req, res) => {
-    advisMemories = advisMemories.filter(m => m.id !== req.params.id);
-    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Memory deletion could not be saved to Firebase." }); }
+    const existing = advisMemories.find(memory => memory.id === req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    advisMemories = advisMemories.filter(memory => memory.id !== req.params.id);
+    try {
+      if (firebaseMemoryStore) await firebaseMemoryStore.deleteMemory(req.params.id);
+      await saveData();
+    } catch (error) {
+      advisMemories.push(existing);
+      return res.status(503).json({ error: "Memory deletion could not be saved to Firebase." });
+    }
     res.json({ success: true });
   });
 
@@ -581,13 +605,22 @@ User Message: "${userMessage}"
   });
 
   app.delete("/api/projects/:id", async (req, res) => {
+    const existing = advisProjects.find(project => project.id === req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
     advisProjects = advisProjects.filter(project => project.id !== req.params.id);
-    try { await saveData(); } catch (error) { return res.status(503).json({ error: "Project deletion could not be saved to Firebase." }); }
+    try {
+      if (firebaseMemoryStore) await firebaseMemoryStore.deleteProject(req.params.id);
+      await saveData();
+    } catch (error) {
+      advisProjects.push(existing);
+      return res.status(503).json({ error: "Project deletion could not be saved to Firebase." });
+    }
     res.json({ success: true });
   });
 
-  app.get("/api/history", (_req, res) => {
-    res.json(chatHistories[OWNER_HISTORY_KEY] || []);
+  app.get("/api/history", (req, res) => {
+    const historyKey = isLocalDevelopment ? (req.query.deviceId || "default") : OWNER_HISTORY_KEY;
+    res.json(chatHistories[historyKey] || []);
   });
 
   const responseCache = {};
@@ -1108,7 +1141,7 @@ Output JSON only, in this exact format:
 
     if (!message) return res.status(400).json({ error: "Protocol violation: Message payload is empty." });
 
-    const deviceId = OWNER_HISTORY_KEY;
+    const deviceId = isLocalDevelopment ? _clientDeviceId : OWNER_HISTORY_KEY;
     if (!chatHistories[deviceId]) chatHistories[deviceId] = [];
 
     const butlerContext = clientButlerContext || {
