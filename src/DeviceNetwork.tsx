@@ -182,7 +182,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState(0);
-  const [cloudNetworkStatus, setCloudNetworkStatus] = useState<{ configured: boolean; missing?: string[]; reason?: string | null } | null>(null);
+  const [cloudNetworkStatus, setCloudNetworkStatus] = useState<{ configured: boolean; databaseConnected?: boolean; state?: string; missing?: string[]; reason?: string | null } | null>(null);
   const handled = useRef(new Set<string>());
   const autoNetworkStarted = useRef(false);
 
@@ -786,7 +786,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         <span className="text-[10px] text-cyan-500/60">Auto-saved · synced to your trusted devices</span>
       </div>
 
-      {cloudNetworkStatus && !cloudNetworkStatus.configured && (
+      {cloudNetworkStatus && (!cloudNetworkStatus.configured || cloudNetworkStatus.databaseConnected === false) && (
         <div className="p-3 rounded border border-amber-400/30 bg-amber-950/30 text-amber-100 text-xs">
           <div className="font-semibold tracking-wider mb-1">CLOUD DEVICE DIRECTORY NOT CONFIGURED</div>
           <p>{cloudNetworkStatus.reason || "The cloud device service is unavailable."}</p>
