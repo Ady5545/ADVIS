@@ -17,6 +17,7 @@ const {
   createInvitationCode,
   createTurnCredentials
 } = require("./src/DeviceNetworkSecurity.cjs");
+const { validateSessionSignal } = require("./src/DeviceNetworkSessionSecurity.cjs");
 
 async function createApp() {
   const app = express();
@@ -205,7 +206,7 @@ async function createApp() {
       "getNetwork", "createNetwork", "getNetworkDevice", "setNetworkDevice",
       "listNetworkDevices", "createNetworkCommand", "getNetworkCommand",
       "listNetworkCommands", "createNetworkInvite", "consumeNetworkInvite",
-      "deleteNetworkDevice", "checkConnection"
+      "deleteNetworkDevice", "getNetworkSession", "createNetworkSession", "updateNetworkSession", "listNetworkSessions", "checkConnection"
     ];
     const adapterReady = Boolean(networkStore && requiredMethods.every(method =>
       typeof networkStore[method] === "function"
@@ -526,6 +527,50 @@ async function createApp() {
       if (targetDeviceId === auth.deviceId) return res.status(400).json({ error: "A device cannot send a remote command to itself." });
       const target = await networkStore.getNetworkDevice(auth.networkId, targetDeviceId);
       if (!target) return res.status(404).json({ error: "Target ADVIS device was not found." });
+
+      // Bind every WebRTC signal to one durable session and exactly two
+      // enrolled devices. This blocks cross-pair injection and stale replay.
+      if (kind === "RTC_SIGNAL") {
+        const sessionId = String(payload.sessionId || "");
+        let currentSession = await networkStore.getNetworkSession(auth.networkId, sessionId);
+        let transition = validateSessionSignal({
+          session: currentSession,
+          networkId: auth.networkId,
+          sessionId,
+          senderDeviceId: auth.deviceId,
+          targetDeviceId,
+          signalType: payload.type,
+          now: Date.now()
+        });
+        if (!transition.ok) {
+          return res.status(transition.status || 409).json({ error: transition.error || "Remote session signal was rejected." });
+        }
+        if (transition.createSession) {
+          try {
+            await networkStore.createNetworkSession(auth.networkId, transition.createSession);
+          } catch (createError) {
+            if (createError.status !== 409 && !String(createError.message || "").includes("ALREADY_EXISTS")) throw createError;
+            currentSession = await networkStore.getNetworkSession(auth.networkId, sessionId);
+            transition = validateSessionSignal({
+              session: currentSession, networkId: auth.networkId, sessionId,
+              senderDeviceId: auth.deviceId, targetDeviceId, signalType: payload.type, now: Date.now()
+            });
+            if (!transition.ok || !transition.duplicate) {
+              return res.status(409).json({ error: "That remote session identifier is already in use." });
+            }
+          }
+        } else if (transition.nextSession) {
+          try {
+            await networkStore.updateNetworkSession(auth.networkId, transition.nextSession);
+          } catch (updateError) {
+            if (updateError.status === 409 || updateError.status === 400) {
+              return res.status(409).json({ error: "Remote session state changed. Reconnect using a new session." });
+            }
+            throw updateError;
+          }
+        }
+      }
+
       const command = {
         id: "cmd_" + crypto.randomBytes(18).toString("hex"),
         networkId: auth.networkId, fromDeviceId: auth.deviceId, fromDeviceName: auth.device.name,
