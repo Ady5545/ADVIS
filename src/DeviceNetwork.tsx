@@ -506,26 +506,26 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       </div>
 
       {!networkId || !deviceToken ? (
-        <details className="bg-black/30 border border-cyan-500/15 rounded-xl p-4">
-          <summary className="cursor-pointer text-[10px] tracking-widest text-cyan-400">CROSS-DEVICE NETWORK SETUP (NEXT STAGE)</summary>
-          <div className="grid md:grid-cols-2 gap-4 mt-3">
-          <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-2 text-cyan-300"><Radio size={18}/> CREATE PRIVATE NETWORK</div>
-            <p className="text-xs text-cyan-100/60 leading-relaxed">Create your own network on this device, then share its invitation link with your other ADVIS installations.</p>
-            <label className="text-[10px] text-cyan-500/70">DEVICE NAME</label>
-            <input value={deviceName} onChange={e => setDeviceName(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-sm outline-none focus:border-cyan-300"/>
-            <button disabled={busy} onClick={createNetwork} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-2 text-xs tracking-widest disabled:opacity-40">{busy ? "INITIALISING..." : "CREATE NETWORK"}</button>
-          </div>
-          <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-2 text-cyan-300"><Link2 size={18}/> JOIN EXISTING NETWORK</div>
-            <p className="text-xs text-cyan-100/60 leading-relaxed">Open an invitation link shared by one of your other devices, or paste it here.</p>
-            <input value={inviteInput} onChange={e => setInviteInput(e.target.value)} placeholder="Paste ADVIS invitation link..." className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs outline-none focus:border-cyan-300"/>
-            <button disabled={busy || !inviteInput.trim()} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-2 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING..." : "JOIN NETWORK"}</button>
-          </div>
-          </div>
-        </details>
+        <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-5 flex flex-col gap-3">
+          {inviteInput ? (
+            <>
+              <div className="flex items-center gap-2 text-cyan-300"><ShieldCheck size={18}/> JOIN A TRUSTED ADVIS NETWORK</div>
+              <p className="text-xs text-cyan-100/70 leading-relaxed">This invitation came from someone who already owns an ADVIS network. Joining makes this installation visible to that network. The owner still needs your approval before controlling this ADVIS tab.</p>
+              <button disabled={busy} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING SECURELY..." : "JOIN TRUSTED NETWORK"}</button>
+              <button onClick={() => setInviteInput("")} className="text-[10px] text-cyan-500/60 hover:text-cyan-300">CANCEL INVITATION</button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 text-cyan-300"><Radio size={18}/> INITIALISING GLOBAL ADVIS NETWORK</div>
+              <p className="text-xs text-cyan-100/70 leading-relaxed">This ADVIS installation creates its private cloud network automatically. Once ready, share its one-time invitation link with the family members or devices you trust. They will appear here whenever they are online.</p>
+              <button disabled={busy} onClick={createNetwork} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-2 text-xs tracking-widest disabled:opacity-40">{busy ? "INITIALISING..." : "RETRY NETWORK SETUP"}</button>
+            </>
+          )}
+          {error && <p className="text-[10px] text-red-300">{error}</p>}
+        </div>
       ) : (
         <>
+
           <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
             <div className="flex justify-between items-center gap-2">
               <div className="flex items-center gap-2 text-cyan-300"><ShieldCheck size={18}/> PRIVATE NETWORK INVITATION</div>
