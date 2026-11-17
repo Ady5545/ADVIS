@@ -911,7 +911,7 @@ export default function App() {
             <pointLight position={[0, 5, -5]} intensity={1.5} color="#0ea5e9" />
             <GestureFrameUpdater handTracking={handTracking} isSpatial={!!currentSpatialObject || !!activeLearningSession} />
             <CameraRig isSpatial={!!currentSpatialObject || !!activeLearningSession} />
-            <HologramCore systemState={systemState} audioLevel={audioLevel} bass={bass} treble={treble} hologramIntensity={hologramIntensity} themeColor={themeColor} isSpatial={!!currentSpatialObject || !!activeLearningSession} />
+            <HologramCore systemState={systemState} audioLevel={audioLevel} bass={bass} treble={treble} hologramIntensity={hologramIntensity} themeColor="#0088ff" isSpatial={!!currentSpatialObject || !!activeLearningSession} />
           
             <React.Suspense fallback={null}>
               {activeLearningSession && activeLearningSession.steps && activeLearningSession.steps[activeLearningSession.currentStepIndex] && (
