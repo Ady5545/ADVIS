@@ -24,13 +24,13 @@
 | Identity | Browser profile ID in localStorage; Electron agent stores a separate ID and token in OS-backed safeStorage | Stable hardware identity and browser-to-native identity migration remain open |
 | Rename | Browser panel and desktop agent send the editable name on heartbeat | Live cross-device persistence is not yet verified |
 | Enrollment | Server-generated owner capability plus hashed, single-use 10-minute invitation; Firestore updateTime precondition prevents replay | Legacy networks are rejected with HTTP 410 and must be recreated/re-enrolled; QR rendering is not added yet |
-| Presence | Browser heartbeat about every 3 seconds; desktop agent heartbeat every 5 seconds; online timeout 35 seconds | Agent version, foreground/background state, robust retry/backoff and live restart test remain |
-| Commands | ADVIS actions plus authenticated RTC signaling; desktop agent accepts RTC signaling and native input events | Full session state machine, audit history, strict input authorization and cross-network integration tests remain |
+| Presence | Browser and desktop heartbeats report agent version, platform, capabilities, foreground state and unattended readiness; directory cards expose desktop readiness | Browser retry/backoff and live restart/re-enrollment verification remain |
+| Commands | Authenticated RTC signaling is bound to a durable two-device session state machine; server validates participants and message sizes | Durable audit history, browser-side retry/backoff and cross-network integration tests remain |
 | WebRTC | Browser-tab path plus Electron display capture and native data-channel path; server can mint short-lived TURN credentials | TURN URL/secret and end-to-end relay tests are not verified; STUN-only networks may fail |
 | Desktop agent | Electron main/preload, visible tray, secure credential storage, one-time enrollment, display preparation, WebRTC and OS input adapters are in source | Installers, signing/notarisation and per-OS runtime tests are not yet complete |
 | Android agent | Not implemented in this repository | ADVIS Mobile repo access/integration and Android MediaProjection/foreground-service work remain |
 | TURN | Backend can mint time-limited HMAC credentials from server-only ADVIS_TURN_URL and ADVIS_TURN_SECRET | TURN provider settings and relay availability need configuration and live verification |
-| Revocation/audit | Owner-only revoke and revoke-all delete device records; agent stops sessions on 401/403/410 | Token rotation, durable audit history, immediate push revocation, session binding/rate limiting remain |
+| Revocation/audit | Owner-only revoke/revoke-all; agent stops on revoked credentials; durable session ownership checks; Firestore-backed rate limits on sensitive writes | Token rotation, durable audit history and push-based revocation remain; current polling detects revocation on the next request |
 
 ## 3. Target architecture
 
@@ -76,7 +76,7 @@
 - [x] Probe Firestore itself (OAuth plus harmless collection read); adapter-method existence alone is not sufficient.
 - [x] Distinguish unconfigured adapter, authentication/permission errors, database read failure, and healthy response without exposing credentials.
 - [ ] Verify the production diagnostic endpoint and device create/join/heartbeat/list operations against a live Firestore project.
-- [ ] Add production API rate limits, stronger request timeouts, and operational alerts.
+- [x] Add Firestore-backed distributed rate limits to network creation, invite/join/revoke, heartbeat and command-send operations.\n- [ ] Extend rate limits to reads/acknowledgements, strengthen request timeouts, and add operational alerts.
 
 **Status:** Diagnostic code is committed. The earlier Phase 0 production build is READY, but live Firestore connectivity and two-device enrollment have not been independently verified.
 
@@ -85,7 +85,7 @@
 - [x] Add owner-generated one-time invitations that expire after 10 minutes and use Firestore update-time preconditions to block replay.
 - [x] Add owner-only revoke and revoke-all endpoints; stop a desktop session when the agent's next authenticated request is rejected.
 - [x] Add browser setup UI for one-time invitations, owner/member roles, and revoke actions.
-- [ ] Add QR rendering, durable native installation identity migration, token rotation, agent version/capability reporting, and a live two-device restart/re-enrollment test.
+- [ ] Add QR rendering, durable browser-to-native identity migration, token rotation, and a live two-device restart/re-enrollment test.\n- [x] Report agent version, capabilities, foreground state and unattended readiness in device heartbeats and the device directory.
 - [ ] Add automatic push revocation/session-ownership checks rather than waiting for the next poll.
 
 **Status:** The new protocol is implemented in source. Legacy permanent-secret networks now receive HTTP 410 and must be disconnected and recreated, then all trusted devices re-enrolled. Production migration is not yet live-verified.
@@ -94,7 +94,8 @@
 - [x] Add server-authenticated ICE configuration and short-lived TURN credentials derived from server-only settings.
 - [x] Add desktop-agent RTC offer/answer handling over the existing authenticated command channel.
 - [ ] Configure and verify a TURN relay provider; without it, the server returns STUN-only configuration.
-- [x] Enforce a durable OFFERED → CONNECTING → ENDED session state machine, bind signaling to the exact controller/target pair, reject cross-pair and replayed signals, and expire sessions after two hours.\n- [ ] Add distributed rate limits, reconnect/backoff, and session activity renewal.
+- [x] Enforce a durable OFFERED → CONNECTING → ENDED session state machine, bind signaling to the exact controller/target pair, reject cross-pair and replayed signals, and expire sessions after two hours.
+- [x] Add Firestore-backed distributed rate limits for sensitive network operations.\n- [x] Add bounded exponential retry/backoff to native desktop heartbeat and command polling.\n- [ ] Add browser sync backoff and session activity renewal.
 - [ ] Test across separate home networks, mobile hotspot, restrictive NAT, and relay outage.
 
 **Status:** Signaling and credential-minting code are present. Cross-network media connectivity is not yet proven because a live TURN relay has not been configured and tested.
@@ -121,7 +122,8 @@
 ### Phase 5 — Security, reliability, production hardening (P0 before general availability)
 - [x] Add hashed per-device credentials, owner-only enrollment management, expiring single-use invites, input event validation, safe server-side TURN credential generation, and an agent-side Stop path on token rejection.
 - [x] Add automated tests for Firestore health, invitation redemption/expiry, token helpers, TURN HMAC credentials, input validation, and source syntax.
-- [x] Add durable session binding and replay-resistant state transitions for WebRTC signaling.\n- [ ] Add distributed rate limits, token rotation, detailed but safe audit history, and push-based session revocation.
+- [x] Add durable session binding and replay-resistant state transitions for WebRTC signaling.
+- [x] Add Firestore-backed distributed rate limits for sensitive network operations.\n- [ ] Add token rotation, detailed but safe audit history, broader read/ack rate limits, and push-based session revocation.
 - [ ] Run cross-network, cross-platform, OS permission/revocation, relay failover, sleep/wake, and cold-start test matrices.
 - [ ] Publish a tested capability matrix; do not advertise any OS/capability as production ready before its tests pass.
 
@@ -151,4 +153,7 @@
 | 2026-11-17 | Updated the browser Devices panel to create and join one-time invitations, identify owner/member devices, revoke members, and label native desktop Connect separately from browser-tab sharing. | Core build workflow passed; UI has not yet been verified against live Firestore devices. |
 | 2026-11-17 | Added the Electron desktop-agent scaffold: visible tray/window, secure credential storage, device enrollment, heartbeat, authenticated RTC signaling, reusable local display preparation, and platform-specific input adapters. | JavaScript parser and input-validation tests passed in CI. No target-OS installer, signing, screen-capture or live input end-to-end test has run. |
 | 2026-11-17 | Added native package scripts, Electron builder configuration, lockfile synchronization workflow, and macOS/Windows/Linux package workflow. | Lockfile sync and web/server core build workflows passed. The new multi-OS packaging workflow has not yet been confirmed. |
-| 2026-11-17 | Expanded automated checks to 12 tests covering Firestore health, invitation replay/expiry, token and identifier helpers, TURN credentials, native input validation, and JS syntax. | GitHub Actions core build on commit 6cb4f1e2 passed: 12 passed, 0 failed; Vite and server bundles built. The later screen-preparation change is awaiting its next CI run. |\n| 2026-11-17 | Added Firestore-backed remote-session records with optimistic concurrency, exact two-device signaling binding, OFFERED → CONNECTING → ENDED transitions, replay protection, two-hour expiry, and six focused state-machine tests. | Code and tests committed to main; current Vercel status check reports a build-rate-limit failure, so the latest changes are not yet verified by a production build. |
+| 2026-11-17 | Expanded automated checks to 12 tests covering Firestore health, invitation replay/expiry, token and identifier helpers, TURN credentials, native input validation, and JS syntax. | GitHub Actions core build on commit 6cb4f1e2 passed: 12 passed, 0 failed; Vite and server bundles built. The later screen-preparation change is awaiting its next CI run. |
+| 2026-11-17 | Added Firestore-backed remote-session records with optimistic concurrency, exact two-device signaling binding, OFFERED → CONNECTING → ENDED transitions, replay protection, two-hour expiry, and six focused state-machine tests. | Code and tests committed to main; current Vercel status check reports a build-rate-limit failure, so the latest changes are not yet verified by a production build. |
+
+| 2026-11-17 | Added atomic Firestore rate limits for network creation, invitation/join, revoke, heartbeat and command-send routes; added a retry-after response and concurrency tests. | Test workflow is running; latest Vercel production build is blocked by the account's build-rate limit. |
