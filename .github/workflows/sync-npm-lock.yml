@@ -5,6 +5,7 @@ on:
       - main
     paths:
       - package.json
+      - package-lock.json
       - .github/workflows/sync-npm-lock.yml
 permissions:
   contents: write
