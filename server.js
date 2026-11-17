@@ -846,17 +846,23 @@ Output JSON only, in this exact format:
          };
          advisMemories.push(newMemory);
          await saveData();
-         return `I have saved that to my memory banks, Sir. (Category: ${intent.category})`;
+         return "Saved to my memory.";
       } 
       else if (intent.action === "DELETE") {
          // Simple exact or partial match delete
          const idx = advisMemories.findIndex(m => m.content.toLowerCase().includes(intent.content.toLowerCase()) || intent.content.toLowerCase().includes(m.content.toLowerCase()));
          if (idx !== -1) {
-            advisMemories.splice(idx, 1);
-            await saveData();
-            return "I have purged that information from my memory banks, Sir.";
+            const removed = advisMemories.splice(idx, 1)[0];
+            try {
+              if (firebaseMemoryStore) await firebaseMemoryStore.deleteMemory(removed.id);
+              await saveData();
+            } catch (error) {
+              advisMemories.splice(idx, 0, removed);
+              throw error;
+            }
+            return "I've removed that from my memory.";
          }
-         return "I could not find a matching memory to delete, Sir.";
+         return "I couldn't find a matching memory to remove.";
       }
       else if (intent.action === "RETRIEVE") {
          let results = advisMemories.filter(m => m.content.toLowerCase().includes(intent.content.toLowerCase()) || m.tags.some(t => intent.content.toLowerCase().includes(t.toLowerCase())));
@@ -868,12 +874,12 @@ Output JSON only, in this exact format:
                results = advisMemories.slice(-5);
             }
          }
-         if (results.length === 0) return "I have no specific memories regarding that, Sir.";
+         if (results.length === 0) return "I don't have a specific memory of that.";
          return `Based on my memory databanks:\n${results.map((m, i) => `${i+1}. ${m.content}`).join('\n')}`;
       }
     } catch (e) {
       console.error(e);
-      return "I encountered an error accessing my memory banks, Sir.";
+      return "I couldn't access my memory store just now.";
     }
     return "Memory operation completed.";
   }
