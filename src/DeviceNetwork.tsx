@@ -596,6 +596,8 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       return;
     }
     const sessionId = "sess_" + randomId();
+    const selectedTarget = devices.find(item => item.id === selectedDevice);
+    const isDesktopAgent = Boolean(selectedTarget?.platform.includes("ADVIS Desktop Agent"));
     setBusy(true);
     setError("");
     try {
@@ -605,12 +607,12 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       setRemoteSessionId(sessionId);
       setRemoteSessionPeerId(selectedDevice);
       setRemoteSessionMode("controller");
-      setRemoteSessionStatus("Calling device · waiting for approval");
+      setRemoteSessionStatus(isDesktopAgent ? "Connecting to enrolled desktop agent…" : "Calling device · waiting for approval");
       peer.ontrack = event => {
         const stream = event.streams?.[0];
         if (stream) {
           setRemoteStream(stream);
-          setRemoteSessionStatus("LIVE · ADVIS tab connected");
+          setRemoteSessionStatus(isDesktopAgent ? "LIVE · FULL DESKTOP CONNECTED" : "LIVE · ADVIS TAB CONNECTED");
         }
       };
       peer.onconnectionstatechange = () => {
@@ -627,7 +629,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       await peer.setLocalDescription(offer);
       await waitForIceGatheringComplete(peer);
       await sendRtcSignal(selectedDevice, sessionId, "OFFER", { sdp: peer.localDescription?.sdp || "" });
-      addActivity("REMOTE SESSION REQUESTED", "Waiting for " + (devices.find(item => item.id === selectedDevice)?.name || "the selected device") + " to approve screen sharing.");
+      addActivity("REMOTE SESSION REQUESTED", isDesktopAgent ? "Connecting to " + (selectedTarget?.name || "the enrolled desktop agent") + " using its local unattended-access setting." : "Waiting for " + (selectedTarget?.name || "the selected device") + " to approve screen sharing.");
     } catch (e: any) {
       closeRemotePeer(sessionId);
       setError(e.message || "Could not start the remote session.");
