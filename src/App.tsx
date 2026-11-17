@@ -735,7 +735,7 @@ export default function App() {
 
         if (!utteranceText.trim() || isHiddenReply) {
            setTimeout(() => setSystemState('ONLINE'), isHiddenReply ? 500 : durationMs);
-           return;
+           return String(data.reply || "");
         }
 
         const utterance = new SpeechSynthesisUtterance(utteranceText);
