@@ -290,7 +290,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       const result = await readJson(await fetch("/api/network/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ networkId: id, networkSecret: secret, deviceId, name: deviceName, platform: navigator.userAgent })
+        body: JSON.stringify({ networkId: id, networkSecret: secret, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent })
       }));
       saveCredentials(id, secret, result.deviceToken);
       addActivity("NETWORK CREATED", "This device is the first node in your private ADVIS network.");
@@ -333,7 +333,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       const result = await readJson(await fetch("/api/network/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ networkId: id, networkSecret: secret, deviceId, name: deviceName, platform: navigator.userAgent })
+        body: JSON.stringify({ networkId: id, networkSecret: secret, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent })
       }));
       saveCredentials(id, secret, result.deviceToken);
       setInviteInput("");
@@ -409,7 +409,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     if (!video) return;
     video.srcObject = remoteStream;
     if (remoteStream) void video.play().catch(() => {});
-  }, [remoteStream, remoteSessionStatus]);
+  }, [remoteStream, remoteSessionStatus, visible]);
 
   useEffect(() => {
     if (!networkId || !deviceToken) return;
@@ -418,7 +418,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       try {
         await fetch("/api/network/heartbeat", {
           method: "POST", headers: authHeaders(),
-          body: JSON.stringify({ networkId, deviceId, name: deviceName, platform: navigator.userAgent })
+          body: JSON.stringify({ networkId, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent })
         }).then(readJson);
         const list = await readJson(await fetch(
           "/api/network/devices?networkId=" + encodeURIComponent(networkId) + "&deviceId=" + encodeURIComponent(deviceId),
@@ -764,7 +764,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
 
       <div className="bg-black/40 border border-cyan-500/20 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-2">
         <label className="text-[10px] tracking-widest text-cyan-400 shrink-0">THIS DEVICE NAME</label>
-        <input value={deviceName} onChange={event => setDeviceName(event.target.value.slice(0, 48))} maxLength={48} placeholder="Give this device a name" className="flex-1 min-w-0 bg-slate-950 border border-cyan-500/30 rounded-lg px-3 py-2 text-xs text-cyan-100 outline-none focus:border-cyan-300"/>
+        <input value={deviceName} onChange={event => setDeviceName(event.target.value.slice(0, 48))} onBlur={() => setDeviceName(value => value.trim() || deviceLabel())} maxLength={48} placeholder="Give this device a name" className="flex-1 min-w-0 bg-slate-950 border border-cyan-500/30 rounded-lg px-3 py-2 text-xs text-cyan-100 outline-none focus:border-cyan-300"/>
         <span className="text-[10px] text-cyan-500/60">Auto-saved · synced to your trusted devices</span>
       </div>
 
@@ -899,7 +899,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               {controlAction === "SPEAK" && <input value={speakText} onChange={e => setSpeakText(e.target.value)} maxLength={500} placeholder="Text for the other device to speak" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
               <button onClick={sendControl} disabled={!selectedDevice || selectedDevice === deviceId} className="bg-cyan-500/15 border border-cyan-400/40 rounded p-2 text-xs disabled:opacity-40">REQUEST REMOTE ACTION</button>
               <p className="text-[10px] text-cyan-500/60">The receiving device must approve each ADVIS action before it executes.</p>
-              <button onClick={startRemoteSession} disabled={!selectedDevice || selectedDevice.startsWith("tab:") || busy} className="flex items-center justify-center gap-2 bg-cyan-500/20 border border-cyan-300/50 rounded p-3 text-xs tracking-widest disabled:opacity-40"><MonitorPlay size={15}/>{busy ? "CONNECTING..." : "START LIVE REMOTE SESSION"}</button>
+              <button onClick={startRemoteSession} disabled={!selectedDevice || selectedDevice.startsWith("tab:") || devices.find(item => item.id === selectedDevice)?.status !== "ONLINE" || busy} className="flex items-center justify-center gap-2 bg-cyan-500/20 border border-cyan-300/50 rounded p-3 text-xs tracking-widest disabled:opacity-40"><MonitorPlay size={15}/>{busy ? "CONNECTING..." : "START LIVE REMOTE SESSION"}</button>
               {remoteSessionStatus && (
                 <div className="flex items-center justify-between gap-2 text-[10px] text-cyan-200 border border-cyan-500/20 rounded-lg p-2">
                   <span>{remoteSessionStatus}</span>
