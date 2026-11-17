@@ -214,8 +214,10 @@ function createFirebaseMemoryStore() {
     return networkDocument(networkId) + "/devices";
   }
 
-  function commandCollection(networkId) {
-    return networkDocument(networkId) + "/commands";
+  function commandCollection(networkId, deviceId) {
+    // Commands live beneath their recipient device. Polling one device must not
+    // scan every command ever sent across the entire private network.
+    return deviceCollection(networkId) + "/" + safeDocumentId(deviceId) + "/commands";
   }
 
   async function getNetwork(networkId) {
@@ -252,21 +254,31 @@ function createFirebaseMemoryStore() {
     return listCollection(deviceCollection(networkId));
   }
 
-  async function createNetworkCommand(networkId, command) {
-    await setDocument(commandCollection(networkId) + "/" + safeDocumentId(command.id), command);
+  async function createNetworkCommand(networkId, deviceId, command) {
+    await setDocument(commandCollection(networkId, deviceId) + "/" + safeDocumentId(command.id), command);
     return command;
   }
 
-  async function getNetworkCommand(networkId, commandId) {
-    const result = await request(commandCollection(networkId) + "/" + safeDocumentId(commandId)).catch(error => {
+  async function getNetworkCommand(networkId, deviceId, commandId) {
+    const result = await request(commandCollection(networkId, deviceId) + "/" + safeDocumentId(commandId)).catch(error => {
       if (error.status === 404) return null;
       throw error;
     });
     return decodeDocument(result);
   }
 
-  async function listNetworkCommands(networkId) {
-    return listCollection(commandCollection(networkId));
+  async function listNetworkCommands(networkId, deviceId) {
+    const collection = commandCollection(networkId, deviceId);
+    const commands = await listCollection(collection);
+    const now = Date.now();
+    const active = commands.filter(command => Number(command.expiresAt || 0) > now);
+    const expired = commands.filter(command => Number(command.expiresAt || 0) <= now);
+    // Opportunistically remove expired queue entries so the per-device queue
+    // remains bounded even when a recipient has been offline for a while.
+    await Promise.all(expired.map(command =>
+      deleteDocument(collection + "/" + safeDocumentId(command.id))
+    ));
+    return active;
   }
 
   function inviteCollection(networkId) {
