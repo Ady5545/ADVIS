@@ -282,12 +282,19 @@ async function createApp() {
       res.status(401).json({ error: "Invalid device network credentials." });
       return null;
     }
-    const device = await networkStore.getNetworkDevice(networkId, deviceId);
+    const [device, network] = await Promise.all([
+      networkStore.getNetworkDevice(networkId, deviceId),
+      networkStore.getNetwork(networkId)
+    ]);
+    if (!network || !network.ownerTokenHash) {
+      res.status(410).json({ error: "This is a legacy shared-secret network. Create a new private network and re-enroll devices to enable one-time invites and owner revocation." });
+      return null;
+    }
     if (!device || !secureEqualHex(device.tokenHash, hashNetworkSecret(token))) {
       res.status(401).json({ error: "This ADVIS device is not registered on that network." });
       return null;
     }
-    return { networkId, deviceId, device };
+    return { networkId, deviceId, device, network };
   }
 
   app.post("/api/network/create", async (req, res) => {
@@ -447,6 +454,7 @@ async function createApp() {
       const now = Date.now();
       return res.json(devices.map(device => ({
         id: device.id, name: device.name, platform: device.platform,
+        role: device.role === "OWNER" ? "OWNER" : "MEMBER",
         createdAt: device.createdAt, lastSeen: device.lastSeen,
         status: now - Number(device.lastSeen || 0) < 35_000 ? "ONLINE" : "OFFLINE",
         current: device.id === auth.deviceId
