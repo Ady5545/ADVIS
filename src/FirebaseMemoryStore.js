@@ -202,6 +202,73 @@ function createFirebaseMemoryStore() {
     ]);
   }
 
+  // Global, owner-scoped device network records. Each installation receives
+  // its own token; the invitation secret is used only once to enroll a device.
+  const networkCollection = ownerRoot + "/networks";
+
+  function networkDocument(networkId) {
+    return networkCollection + "/" + safeDocumentId(networkId);
+  }
+
+  function deviceCollection(networkId) {
+    return networkDocument(networkId) + "/devices";
+  }
+
+  function commandCollection(networkId) {
+    return networkDocument(networkId) + "/commands";
+  }
+
+  async function getNetwork(networkId) {
+    const result = await request(networkDocument(networkId)).catch(error => {
+      if (error.status === 404) return null;
+      throw error;
+    });
+    return decodeDocument(result);
+  }
+
+  async function createNetwork(network) {
+    const serialized = JSON.stringify(network);
+    await request(networkDocument(network.id) + "?currentDocument.exists=false", {
+      method: "PATCH",
+      body: JSON.stringify({ fields: { payload: { stringValue: serialized } } })
+    });
+    return network;
+  }
+
+  async function getNetworkDevice(networkId, deviceId) {
+    const result = await request(deviceCollection(networkId) + "/" + safeDocumentId(deviceId)).catch(error => {
+      if (error.status === 404) return null;
+      throw error;
+    });
+    return decodeDocument(result);
+  }
+
+  async function setNetworkDevice(networkId, device) {
+    await setDocument(deviceCollection(networkId) + "/" + safeDocumentId(device.id), device);
+    return device;
+  }
+
+  async function listNetworkDevices(networkId) {
+    return listCollection(deviceCollection(networkId));
+  }
+
+  async function createNetworkCommand(networkId, command) {
+    await setDocument(commandCollection(networkId) + "/" + safeDocumentId(command.id), command);
+    return command;
+  }
+
+  async function getNetworkCommand(networkId, commandId) {
+    const result = await request(commandCollection(networkId) + "/" + safeDocumentId(commandId)).catch(error => {
+      if (error.status === 404) return null;
+      throw error;
+    });
+    return decodeDocument(result);
+  }
+
+  async function listNetworkCommands(networkId) {
+    return listCollection(commandCollection(networkId));
+  }
+
   return {
     projectId,
     loadState,
