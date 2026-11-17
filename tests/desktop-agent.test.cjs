@@ -25,7 +25,16 @@ test("desktop agent JavaScript files pass the Node parser", () => {
 
 test("native input capability matrix does not overstate Wayland support", () => {
   assert.equal(getNativeInputCapabilities("darwin").supported, true);
-  assert.match(getNativeInputCapabilities("darwin").note, /Hover and scroll are not implemented/);
-  assert.match(getNativeInputCapabilities("linux").note, /Wayland global input is not supported/);
+  assert.match(getNativeInputCapabilities("darwin").note, /Pointer hover and global scrolling are not implemented/);
+  const previousWayland = process.env.WAYLAND_DISPLAY;
+  const previousSessionType = process.env.XDG_SESSION_TYPE;
+  try {
+    process.env.WAYLAND_DISPLAY = "wayland-0";
+    delete process.env.XDG_SESSION_TYPE;
+    assert.match(getNativeInputCapabilities("linux").note, /Wayland global input is not supported/);
+  } finally {
+    if (previousWayland === undefined) delete process.env.WAYLAND_DISPLAY; else process.env.WAYLAND_DISPLAY = previousWayland;
+    if (previousSessionType === undefined) delete process.env.XDG_SESSION_TYPE; else process.env.XDG_SESSION_TYPE = previousSessionType;
+  }
   assert.equal(getNativeInputCapabilities("freebsd").supported, false);
 });
