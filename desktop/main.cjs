@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, safeStorage, systemPreferences, shell, Tray, Menu, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, safeStorage, systemPreferences, shell, Tray, Menu, nativeImage, screen } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
