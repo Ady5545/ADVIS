@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, BrainCircuit, History, FolderOpen, MonitorSmartphone, Settings2, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatMessage } from './App';
+import { DeviceNetwork } from './DeviceNetwork';
 
 export function ViewModal({ 
   currentView, 
@@ -162,35 +163,7 @@ export function ViewModal({
           </div>
         );
       case 'devices':
-        return (
-          <div className="flex flex-col gap-4">
-            <h3 className="text-cyan-400 font-bold mb-2">CONNECTED DEVICES</h3>
-            <div className="space-y-3">
-              <div className="bg-black/50 p-3 rounded border border-cyan-500/20 flex justify-between items-center hover:bg-cyan-900/30 transition-colors">
-                <div className="flex items-center gap-3">
-                  <MonitorSmartphone size={20} className="text-cyan-400" />
-                  <div>
-                    <div className="text-cyan-100 truncate max-w-[200px]" title={userAgent}>{userAgent.split(' ')[0]} {userAgent.split(' ')[1]}</div>
-                    <div className="text-cyan-500/50 text-xs">CURRENT UPLINK</div>
-                  </div>
-                </div>
-                <span className="text-green-400 text-xs font-bold px-2 py-1 bg-green-400/10 rounded">CONNECTED</span>
-              </div>
-              <div className="bg-black/50 p-3 rounded border border-cyan-500/20 flex justify-between items-center hover:bg-cyan-900/30 transition-colors">
-                <div className="flex items-center gap-3">
-                  <MonitorSmartphone size={20} className="text-cyan-400" />
-                  <div>
-                    <div className="text-cyan-100">GLOBAL SAT-NET</div>
-                    <div className="text-cyan-500/50 text-xs">AERIAL COMMAND</div>
-                  </div>
-                </div>
-                <span className={onLine ? "text-green-400 text-xs font-bold px-2 py-1 bg-green-400/10 rounded" : "text-red-400 text-xs font-bold px-2 py-1 bg-red-400/10 rounded"}>
-                  {onLine ? "CONNECTED" : "OFFLINE"}
-                </span>
-              </div>
-            </div>
-          </div>
-        );
+        return <DeviceNetwork />;
       case 'status':
         return (
           <div className="flex flex-col gap-4">
