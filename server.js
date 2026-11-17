@@ -108,22 +108,35 @@ async function createApp() {
     if (!firebaseMemoryStore) return false;
     const remote = await firebaseMemoryStore.loadState();
     const remoteHasData = remote.memories.length || remote.projects.length || remote.history.length;
-    const oldLocalHistory = Object.values(chatHistories || {}).flat()
-      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const oldLocalHistory = Object.entries(chatHistories || {}).flatMap(([conversationId, messages]) =>
+      (Array.isArray(messages) ? messages : []).map(message => ({ ...message, conversationId }))
+    ).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     const localHasData = advisMemories.length || advisProjects.length || oldLocalHistory.length;
 
     if (!remoteHasData && localHasData) {
-      const migratedHistory = oldLocalHistory.slice(-200);
+      const migratedHistory = oldLocalHistory.slice(-2000);
       await firebaseMemoryStore.saveState({
         memories: advisMemories,
         projects: advisProjects,
         history: migratedHistory
       });
-      chatHistories = { [OWNER_HISTORY_KEY]: migratedHistory };
+      chatHistories = {};
+      for (const message of migratedHistory) {
+        const conversationId = String(message.conversationId || OWNER_HISTORY_KEY);
+        if (!chatHistories[conversationId]) chatHistories[conversationId] = [];
+        const { conversationId: _conversationId, ...entry } = message;
+        chatHistories[conversationId].push(entry);
+      }
     } else {
       advisMemories = remote.memories || [];
       advisProjects = remote.projects || [];
-      chatHistories = { [OWNER_HISTORY_KEY]: (remote.history || []).slice(-200) };
+      chatHistories = {};
+      for (const message of (remote.history || [])) {
+        const conversationId = String(message.conversationId || OWNER_HISTORY_KEY);
+        if (!chatHistories[conversationId]) chatHistories[conversationId] = [];
+        const { conversationId: _conversationId, ...entry } = message;
+        chatHistories[conversationId].push(entry);
+      }
     }
     return true;
   }
@@ -156,7 +169,9 @@ async function createApp() {
     const snapshot = {
       memories: advisMemories.map(memory => ({ ...memory })),
       projects: advisProjects.map(project => ({ ...project })),
-      history: (chatHistories[OWNER_HISTORY_KEY] || []).slice(-200)
+      history: Object.entries(chatHistories || {}).flatMap(([conversationId, messages]) =>
+        (Array.isArray(messages) ? messages : []).map(message => ({ ...message, conversationId }))
+      ).slice(-2000)
     };
     const write = firebaseWriteChain.then(() => firebaseMemoryStore.saveState(snapshot));
     firebaseWriteChain = write.catch(error => {
@@ -681,8 +696,31 @@ User Message: "${userMessage}"
   });
 
   app.get("/api/history", (req, res) => {
-    const historyKey = isLocalDevelopment ? (req.query.deviceId || "default") : OWNER_HISTORY_KEY;
-    res.json(chatHistories[historyKey] || []);
+    if (req.query.mode === "list") {
+      const conversations = Object.entries(chatHistories || {}).map(([id, messages]) => {
+        const entries = Array.isArray(messages) ? messages : [];
+        const firstUser = entries.find(message => message.role === "user");
+        const latest = entries[entries.length - 1];
+        return {
+          id,
+          title: String(firstUser?.content || "Untitled conversation").replace(/\\s+/g, " ").slice(0, 88),
+          createdAt: Number(entries[0]?.timestamp) || 0,
+          updatedAt: Number(latest?.timestamp) || 0,
+          messageCount: entries.length
+        };
+      }).filter(conversation => conversation.messageCount > 0)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      return res.json(conversations);
+    }
+    const requestedId = String(req.query.conversationId || "");
+    const legacyKey = isLocalDevelopment ? String(req.query.deviceId || "default") : OWNER_HISTORY_KEY;
+    res.json(chatHistories[requestedId || legacyKey] || []);
+  });
+
+  app.get("/api/history/:conversationId", (req, res) => {
+    const conversationId = String(req.params.conversationId || "");
+    if (!/^[A-Za-z0-9_-]{8,120}$/.test(conversationId)) return res.status(400).json({ error: "Invalid conversation ID." });
+    return res.json(chatHistories[conversationId] || []);
   });
 
   const responseCache = {};
@@ -1198,7 +1236,8 @@ Output JSON only, in this exact format:
     const { 
       message, 
       mode, 
-      deviceId: _clientDeviceId = 'default', 
+      deviceId: _clientDeviceId = 'default',
+      conversationId: requestedConversationId,
       image, 
       currentSpatialObject, 
       selectedComponentId, 
@@ -1209,7 +1248,11 @@ Output JSON only, in this exact format:
 
     if (!message) return res.status(400).json({ error: "Protocol violation: Message payload is empty." });
 
-    const deviceId = isLocalDevelopment ? _clientDeviceId : OWNER_HISTORY_KEY;
+    const requestedId = String(requestedConversationId || "");
+    const conversationKey = /^[A-Za-z0-9_-]{8,120}$/.test(requestedId)
+      ? requestedId
+      : (isLocalDevelopment ? String(_clientDeviceId || "default") : OWNER_HISTORY_KEY);
+    const deviceId = conversationKey;
     if (!chatHistories[deviceId]) chatHistories[deviceId] = [];
 
     const butlerContext = clientButlerContext || {
