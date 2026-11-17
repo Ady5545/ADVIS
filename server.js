@@ -489,6 +489,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "list_devices", 90, 60_000)) return;
       const devices = await networkStore.listNetworkDevices(auth.networkId);
       const now = Date.now();
       return res.json(devices.map(device => ({
@@ -512,6 +513,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "get_ice_config", 30, 60_000)) return;
       const urls = String(process.env.ADVIS_TURN_URL || "").split(",").map(value => value.trim()).filter(Boolean);
       const secret = process.env.ADVIS_TURN_SECRET || "";
       const iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -618,6 +620,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "poll_commands", 120, 60_000)) return;
       const commands = await networkStore.listNetworkCommands(auth.networkId, auth.deviceId);
       const now = Date.now();
       return res.json(commands.filter(command =>
@@ -635,6 +638,7 @@ async function createApp() {
     try {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "ack_command", 180, 60_000)) return;
       const command = await networkStore.getNetworkCommand(auth.networkId, auth.deviceId, req.params.id);
       if (!command || command.targetDeviceId !== auth.deviceId) return res.status(404).json({ error: "Command not found for this device." });
       const status = String(req.body.status || "");
