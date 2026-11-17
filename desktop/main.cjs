@@ -57,7 +57,10 @@ function stopAgentSession() {
 }
 function installDisplayCaptureHandler() {
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
-    if (!config.allowUnattended || !sessionActive) return callback(null);
+    // Capture can only be requested from the local agent renderer. The renderer
+    // invokes getDisplayMedia from the one-time local setup action; remote offers
+    // reuse that stream and never trigger a new browser picker.
+    if (!mainWindow || mainWindow.isDestroyed()) return callback(null);
     try {
       const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
       const source = sources.find(item => item.id === config.displaySourceId) || sources[0];
