@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { X, BrainCircuit, History, FolderOpen, MonitorSmartphone, Settings2, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatMessage } from './App';
-import { DeviceNetwork } from './DeviceNetwork';
 
 export function ViewModal({ 
   currentView, 
@@ -163,7 +162,7 @@ export function ViewModal({
           </div>
         );
       case 'devices':
-        return <DeviceNetwork />;
+        return null;
       case 'status':
         return (
           <div className="flex flex-col gap-4">
