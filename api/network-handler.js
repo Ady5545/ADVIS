@@ -1,41 +1,47 @@
 // Dedicated Vercel Function for nested ADVIS network endpoints.
-// Vercel's file-based API routing does not provide a portable catch-all for
-// this Vite project, so vercel.json rewrites /api/network/* through this file.
+// vercel.json rewrites /api/network/* through this file because Vercel's
+// file-based API routing is not a portable catch-all for this Vite project.
 const { createApp } = require("../server");
 
 let appPromise;
 
-module.exports = async function advisNetworkApi(req, res) {
+function buildNetworkApiUrl(requestUrl, host = "localhost") {
+  const parsed = new URL(requestUrl || "/", `http://${host}`);
+  const route = String(parsed.searchParams.get("__advis_path") || "");
+  const segments = route.split("/");
+
+  if (
+    !route ||
+    route.length > 512 ||
+    !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(route) ||
+    segments.some(segment => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("Invalid ADVIS network route.");
+  }
+
+  const query = new URLSearchParams(parsed.searchParams);
+  query.delete("__advis_path");
+  return `/api/network/${route}${query.toString() ? `?${query.toString()}` : ""}`;
+}
+
+async function advisNetworkApi(req, res) {
   try {
-    const host = req.headers.host || "localhost";
-    const parsed = new URL(req.url || "/", `http://${host}`);
-    const route = String(parsed.searchParams.get("__advis_path") || "");
-    const segments = route.split("/");
-
-    // Accept only known-safe path-segment characters; Express owns the actual
-    // route/method authorization after the request is reconstructed.
-    if (
-      !route ||
-      route.length > 512 ||
-      !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(route) ||
-      segments.some(segment => !segment || segment === "." || segment === "..")
-    ) {
-      return res.status(400).json({ error: "Invalid ADVIS network route." });
-    }
-
-    const query = new URLSearchParams(parsed.searchParams);
-    query.delete("__advis_path");
-    req.url = `/api/network/${route}${query.toString() ? `?${query.toString()}` : ""}`;
-
+    req.url = buildNetworkApiUrl(req.url, req.headers.host);
     if (!appPromise) appPromise = createApp();
     const app = await appPromise;
     return app(req, res);
   } catch (error) {
+    const invalidRoute = error?.message === "Invalid ADVIS network route.";
     console.error("[ADVIS Network Function] Failed to initialize:", error);
     if (!res.headersSent) {
-      return res.status(500).json({
-        error: "ADVIS network service could not initialize."
+      return res.status(invalidRoute ? 400 : 500).json({
+        error: invalidRoute
+          ? "Invalid ADVIS network route."
+          : "ADVIS network service could not initialize."
       });
     }
   }
-};
+}
+
+module.exports = advisNetworkApi;
+module.exports.buildNetworkApiUrl = buildNetworkApiUrl;
