@@ -212,7 +212,10 @@
       networkId: credentials.networkId, deviceId: credentials.deviceId,
       name: config.deviceName, platform: "ADVIS Desktop Agent · " + config.platform + " " + config.architecture,
       agentVersion: config.agentVersion || "unknown", capabilities,
-      unattendedReady: config.allowUnattended === true, foreground: config.foreground === true
+      unattendedReady: config.allowUnattended === true && Boolean(
+        preparedStream && preparedStream.getVideoTracks().some(track => track.readyState === "live")
+      ),
+      foreground: document.visibilityState === "visible"
     }) });
   }
   async function pollCommands() {
