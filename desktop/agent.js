@@ -28,7 +28,11 @@
     const raw = await response.text();
     let data = {};
     try { data = raw ? JSON.parse(raw) : {}; } catch (_) {}
-    if (!response.ok) throw new Error(data.error || ("ADVIS server returned HTTP " + response.status));
+    if (!response.ok) {
+      const error = new Error(data.error || ("ADVIS server returned HTTP " + response.status));
+      error.status = response.status;
+      throw error;
+    }
     return data;
   }
   async function persist(next) {
@@ -159,7 +163,21 @@
   }
   function startLoops() {
     if (!config || !config.enrolled || pollTimer || heartbeatTimer) return;
-    const safeRun = async fn => { try { await fn(); } catch (error) { status("Cloud sync issue: " + (error.message || "Network unavailable."), "warn"); } };
+    const safeRun = async fn => {
+      try { await fn(); }
+      catch (error) {
+        if (Number(error.status) === 401 || Number(error.status) === 410 || Number(error.status) === 403) {
+          if (pollTimer) clearInterval(pollTimer);
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
+          pollTimer = null;
+          heartbeatTimer = null;
+          await stopSession(false);
+          status("This device's network access was revoked or is no longer valid. The desktop session has been stopped. Re-enrol with a fresh owner invitation.", "danger");
+        } else {
+          status("Cloud sync issue: " + (error.message || "Network unavailable."), "warn");
+        }
+      }
+    };
     void safeRun(heartbeat); void safeRun(pollCommands);
     heartbeatTimer = setInterval(() => void safeRun(heartbeat), 5000);
     pollTimer = setInterval(() => void safeRun(pollCommands), 1800);
