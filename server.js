@@ -8,6 +8,15 @@ dotenv.config();
 const { processButlerTurn } = require("./ButlerEngine");
 const crypto = require("crypto");
 const { createFirebaseMemoryStore } = require("./src/FirebaseMemoryStore");
+const {
+  hashSecret: hashNetworkSecret,
+  constantTimeHexEqual: secureEqualHex,
+  safeNetworkId,
+  safeDeviceId,
+  createToken: createNetworkToken,
+  createInvitationCode,
+  createTurnCredentials
+} = require("./src/DeviceNetworkSecurity.cjs");
 
 async function createApp() {
   const app = express();
@@ -195,7 +204,8 @@ async function createApp() {
     const requiredMethods = [
       "getNetwork", "createNetwork", "getNetworkDevice", "setNetworkDevice",
       "listNetworkDevices", "createNetworkCommand", "getNetworkCommand",
-      "listNetworkCommands", "checkConnection"
+      "listNetworkCommands", "createNetworkInvite", "consumeNetworkInvite",
+      "deleteNetworkDevice", "checkConnection"
     ];
     const adapterReady = Boolean(networkStore && requiredMethods.every(method =>
       typeof networkStore[method] === "function"
@@ -258,17 +268,7 @@ async function createApp() {
     }
   });
 
-  const hashNetworkSecret = value => crypto.createHash("sha256").update(String(value)).digest("hex");
-  const safeNetworkId = value => /^[A-Za-z0-9_-]{20,100}$/.test(String(value || ""));
-  const safeDeviceId = value => /^[A-Za-z0-9_-]{12,100}$/.test(String(value || ""));
   const allowedControlActions = new Set(["DISPLAY_MODEL", "CLOSE_MODEL", "SET_MODE", "OPEN_VIEW", "SPEAK", "START_REMOTE_SESSION"]);
-
-  function secureEqualHex(left, right) {
-    const a = Buffer.from(String(left || ""), "hex");
-    const b = Buffer.from(String(right || ""), "hex");
-    return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
-  }
-
   async function authenticateNetworkDevice(req, res) {
     if (!networkStore || !networkStore.getNetworkDevice) {
       res.status(503).json({ error: "ADVIS Device Network requires the configured Firestore connection." });
@@ -293,53 +293,131 @@ async function createApp() {
   app.post("/api/network/create", async (req, res) => {
     try {
       if (!networkStore?.createNetwork) return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
-      const { networkId, networkSecret, deviceId, name, platform } = req.body || {};
-      if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || String(networkSecret || "").length < 32) {
-        return res.status(400).json({ error: "A valid network identity and secret are required." });
+      const { networkId, deviceId, name, platform } = req.body || {};
+      if (!safeNetworkId(networkId) || !safeDeviceId(deviceId)) {
+        return res.status(400).json({ error: "A valid network and device identity are required." });
       }
-      const network = { id: networkId, secretHash: hashNetworkSecret(networkSecret), createdAt: Date.now(), protocolVersion: 1 };
+      const ownerToken = createNetworkToken();
+      const deviceToken = createNetworkToken();
+      const now = Date.now();
+      const network = {
+        id: networkId,
+        ownerTokenHash: hashNetworkSecret(ownerToken),
+        ownerDeviceId: deviceId,
+        createdAt: now,
+        protocolVersion: 2
+      };
       await networkStore.createNetwork(network);
-      const deviceToken = crypto.randomBytes(32).toString("base64url");
       const device = {
-        id: deviceId, name: String(name || "ADVIS Device").slice(0, 64),
+        id: deviceId,
+        name: String(name || "ADVIS Device").trim().slice(0, 64) || "ADVIS Device",
         platform: String(platform || "Unknown").slice(0, 80),
-        tokenHash: hashNetworkSecret(deviceToken), createdAt: Date.now(),
-        lastSeen: Date.now(), status: "ONLINE", capabilities: ["MESSAGE", "ADVIS_CONTROL"]
+        tokenHash: hashNetworkSecret(deviceToken),
+        createdAt: now,
+        lastSeen: now,
+        status: "ONLINE",
+        role: "OWNER",
+        capabilities: ["MESSAGE", "ADVIS_CONTROL", "BROWSER_TAB"]
       };
       await networkStore.setNetworkDevice(networkId, device);
-      return res.status(201).json({ networkId, deviceId, deviceToken, devices: [{ ...device, tokenHash: undefined }] });
+      return res.status(201).json({ networkId, deviceId, deviceToken, ownerToken, ownerDeviceId: deviceId });
     } catch (error) {
       if (error.status === 409 || String(error.message).includes("ALREADY_EXISTS")) {
-        return res.status(409).json({ error: "That network identity already exists. Generate a new invite." });
+        return res.status(409).json({ error: "That network identity already exists. Generate a new one." });
       }
       console.error("[ADVIS Network] create:", error);
       return res.status(503).json({ error: "Could not create the ADVIS network." });
     }
   });
 
+  app.post("/api/network/invites", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkOwner(req, res);
+      if (!auth) return;
+      const code = createInvitationCode();
+      const invite = {
+        id: hashNetworkSecret(code),
+        createdBy: auth.deviceId,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 10 * 60_000,
+        usedAt: null
+      };
+      await networkStore.createNetworkInvite(auth.networkId, invite);
+      return res.status(201).json({ networkId: auth.networkId, invitationCode: code, expiresAt: invite.expiresAt, singleUse: true });
+    } catch (error) {
+      console.error("[ADVIS Network] invite:", error);
+      return res.status(503).json({ error: "Could not create a one-time device invitation." });
+    }
+  });
+
   app.post("/api/network/join", async (req, res) => {
     try {
-      if (!networkStore?.getNetwork) return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
-      const { networkId, networkSecret, deviceId, name, platform } = req.body || {};
-      if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || String(networkSecret || "").length < 32) {
-        return res.status(400).json({ error: "The invitation is incomplete or invalid." });
+      if (!networkStore?.getNetwork || !networkStore?.consumeNetworkInvite) {
+        return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
+      }
+      const { networkId, invitationCode, deviceId, name, platform } = req.body || {};
+      if (!safeNetworkId(networkId) || !safeDeviceId(deviceId) || String(invitationCode || "").length < 24) {
+        return res.status(400).json({ error: "A valid one-time invitation and device identity are required." });
       }
       const network = await networkStore.getNetwork(networkId);
-      if (!network || !secureEqualHex(network.secretHash, hashNetworkSecret(networkSecret))) {
-        return res.status(403).json({ error: "This ADVIS network invitation is invalid." });
+      if (!network || !network.ownerTokenHash) {
+        return res.status(403).json({ error: "This network uses the legacy invitation format. Create a new trusted network to enable one-time enrollment and owner controls." });
       }
-      const deviceToken = crypto.randomBytes(32).toString("base64url");
+      const claimed = await networkStore.consumeNetworkInvite(networkId, hashNetworkSecret(invitationCode));
+      if (!claimed) return res.status(403).json({ error: "This invitation is invalid, expired, or already used. Ask the owner for a fresh code." });
+      if (deviceId === network.ownerDeviceId) return res.status(409).json({ error: "The owner device is already enrolled." });
+      const deviceToken = createNetworkToken();
+      const now = Date.now();
       const device = {
-        id: deviceId, name: String(name || "ADVIS Device").slice(0, 64),
+        id: deviceId,
+        name: String(name || "ADVIS Device").trim().slice(0, 64) || "ADVIS Device",
         platform: String(platform || "Unknown").slice(0, 80),
-        tokenHash: hashNetworkSecret(deviceToken), createdAt: Date.now(),
-        lastSeen: Date.now(), status: "ONLINE", capabilities: ["MESSAGE", "ADVIS_CONTROL"]
+        tokenHash: hashNetworkSecret(deviceToken),
+        createdAt: now,
+        lastSeen: now,
+        status: "ONLINE",
+        role: "MEMBER",
+        capabilities: ["MESSAGE", "ADVIS_CONTROL", "BROWSER_TAB"]
       };
       await networkStore.setNetworkDevice(networkId, device);
       return res.status(201).json({ networkId, deviceId, deviceToken });
     } catch (error) {
       console.error("[ADVIS Network] join:", error);
       return res.status(503).json({ error: "Could not join the ADVIS network." });
+    }
+  });
+
+  app.post("/api/network/devices/:targetDeviceId/revoke", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkOwner(req, res);
+      if (!auth) return;
+      const targetDeviceId = String(req.params.targetDeviceId || "");
+      if (!safeDeviceId(targetDeviceId) || targetDeviceId === auth.deviceId) {
+        return res.status(400).json({ error: "Choose another enrolled device. Transfer ownership before removing the owner device." });
+      }
+      const target = await networkStore.getNetworkDevice(auth.networkId, targetDeviceId);
+      if (!target) return res.status(404).json({ error: "The selected device is not enrolled." });
+      await networkStore.deleteNetworkDevice(auth.networkId, targetDeviceId);
+      return res.json({ success: true, revokedDeviceId: targetDeviceId, revokedAt: Date.now() });
+    } catch (error) {
+      console.error("[ADVIS Network] revoke:", error);
+      return res.status(503).json({ error: "Could not revoke the selected device." });
+    }
+  });
+
+  app.post("/api/network/devices/revoke-all", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkOwner(req, res);
+      if (!auth) return;
+      const devices = await networkStore.listNetworkDevices(auth.networkId);
+      const targets = devices.filter(device => device.id !== auth.deviceId);
+      for (const device of targets) {
+        await networkStore.deleteNetworkDevice(auth.networkId, device.id);
+      }
+      return res.json({ success: true, revokedCount: targets.length, revokedAt: Date.now() });
+    } catch (error) {
+      console.error("[ADVIS Network] revoke all:", error);
+      return res.status(503).json({ error: "Could not revoke all member devices." });
     }
   });
 
@@ -376,6 +454,24 @@ async function createApp() {
     } catch (error) {
       console.error("[ADVIS Network] devices:", error);
       return res.status(503).json({ error: "Could not retrieve connected devices." });
+    }
+  });
+
+  app.get("/api/network/ice-config", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      const urls = String(process.env.ADVIS_TURN_URL || "").split(",").map(value => value.trim()).filter(Boolean);
+      const secret = process.env.ADVIS_TURN_SECRET || "";
+      const iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
+      if (urls.length && secret) {
+        const credentials = createTurnCredentials({ secret, deviceId: auth.deviceId, ttlSeconds: 600 });
+        if (credentials) iceServers.push({ urls, username: credentials.username, credential: credentials.credential });
+      }
+      return res.json({ iceServers, relayConfigured: iceServers.length > 1, credentialsExpireAt: iceServers.length > 1 ? createTurnCredentials({ secret, deviceId: auth.deviceId, ttlSeconds: 600 }).expiresAt : null });
+    } catch (error) {
+      console.error("[ADVIS Network] ICE config:", error);
+      return res.status(503).json({ error: "Could not prepare secure session connectivity." });
     }
   });
 
