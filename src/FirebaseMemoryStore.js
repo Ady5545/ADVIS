@@ -163,16 +163,15 @@ function createFirebaseMemoryStore() {
     const normalized = (records || []).filter(Boolean);
     const desired = new Map(normalized.map(record => [safeDocumentId(record.id), record]));
     const existingRecords = await listCollection(collectionPath);
-    const existingIds = new Set(existingRecords.map(record => safeDocumentId(record.id)));
+    const existingById = new Map(existingRecords.map(record => [safeDocumentId(record.id), JSON.stringify(record)]));
 
-    const writes = Array.from(desired.entries());
+    // Upsert changed records only. Deletion is explicit per document, avoiding
+    // broad collection replacement races between two paired devices.
+    const writes = Array.from(desired.entries()).filter(([id, record]) =>
+      existingById.get(id) !== JSON.stringify(record)
+    );
     for (let i = 0; i < writes.length; i += 8) {
       await Promise.all(writes.slice(i, i + 8).map(([id, record]) => setDocument(collectionPath + "/" + id, record)));
-    }
-
-    const stale = Array.from(existingIds).filter(id => !desired.has(id));
-    for (let i = 0; i < stale.length; i += 8) {
-      await Promise.all(stale.slice(i, i + 8).map(id => deleteDocument(collectionPath + "/" + id)));
     }
   }
 
@@ -206,7 +205,9 @@ function createFirebaseMemoryStore() {
   return {
     projectId,
     loadState,
-    saveState
+    saveState,
+    deleteMemory: id => deleteDocument(memoryCollection + "/" + safeDocumentId(id)),
+    deleteProject: id => deleteDocument(projectCollection + "/" + safeDocumentId(id))
   };
 }
 
