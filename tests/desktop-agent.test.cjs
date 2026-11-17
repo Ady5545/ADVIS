@@ -19,7 +19,7 @@ test("desktop input adapter constrains keys and scroll magnitudes", () => {
 });
 
 test("desktop agent JavaScript files pass the Node parser", () => {
-  const files = ["desktop/main.cjs", "desktop/preload.cjs", "desktop/native-input.cjs", "desktop/agent.js"];
+  const files = ["server.js", "src/DeviceNetworkSecurity.cjs", "desktop/main.cjs", "desktop/preload.cjs", "desktop/native-input.cjs", "desktop/agent.js"];
   for (const file of files) execFileSync(process.execPath, ["--check", path.join(__dirname, "..", file)]);
 });
 
