@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("advisAgent", Object.freeze({
   getConfig: () => ipcRenderer.invoke("agent:config:get"),
+  getCredentials: () => ipcRenderer.invoke("agent:credentials:get"),
   saveConfig: value => ipcRenderer.invoke("agent:config:save", value),
   listDisplays: () => ipcRenderer.invoke("agent:displays:list"),
   startSession: () => ipcRenderer.invoke("agent:session:start"),
