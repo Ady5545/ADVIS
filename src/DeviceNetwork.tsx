@@ -15,6 +15,16 @@ type IncomingControl = {
   fromDeviceId: string;
   fromDeviceName: string;
   payload: { action: string; [key: string]: any };
+  source?: "cloud" | "tab";
+  fromTabId?: string;
+  requestId?: string;
+};
+
+type LocalTab = {
+  id: string;
+  name: string;
+  platform: string;
+  lastSeen: number;
 };
 
 const NETWORK_KEY = "advis_network_id";
@@ -57,6 +67,11 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [deviceId, setDeviceId] = useState(() => localStorage.getItem(DEVICE_KEY) || randomId());
   const [deviceName, setDeviceName] = useState(() => localStorage.getItem(NAME_KEY) || deviceLabel());
   const [devices, setDevices] = useState<Device[]>([]);
+  // A fresh ID per open tab lets same-origin ADVIS tabs discover one another
+  // without invitations, accounts, or shared localStorage credentials.
+  const [tabId] = useState(() => randomId());
+  const [localTabs, setLocalTabs] = useState<LocalTab[]>([]);
+  const tabChannel = useRef<BroadcastChannel | null>(null);
   const [inviteInput, setInviteInput] = useState("");
   const [selectedDevice, setSelectedDevice] = useState("");
   const [message, setMessage] = useState("");
@@ -71,6 +86,74 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState(0);
   const handled = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") {
+      setError("This browser does not support automatic tab discovery. Try a current version of Chrome, Edge, or Firefox.");
+      return;
+    }
+    const channel = new BroadcastChannel("advis-browser-tabs-v1");
+    tabChannel.current = channel;
+    const announce = () => channel.postMessage({
+      type: "TAB_HEARTBEAT",
+      tabId,
+      name: deviceName + " · ADVIS tab",
+      platform: navigator.userAgent,
+      lastSeen: Date.now()
+    });
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data || {};
+      if (!data || data.tabId === tabId || data.toTabId && data.toTabId !== tabId) return;
+      if (data.type === "TAB_HEARTBEAT") {
+        setLocalTabs(previous => {
+          const next = previous.filter(tab => tab.id !== data.tabId);
+          return [...next, {
+            id: String(data.tabId),
+            name: String(data.name || "ADVIS tab"),
+            platform: String(data.platform || "Browser"),
+            lastSeen: Number(data.lastSeen || Date.now())
+          }];
+        });
+      } else if (data.type === "CONTROL_REQUEST") {
+        const requestId = String(data.requestId || "");
+        if (!requestId || handled.current.has(requestId)) return;
+        handled.current.add(requestId);
+        setIncoming({
+          id: requestId,
+          fromDeviceId: String(data.fromTabId || ""),
+          fromDeviceName: String(data.fromTabName || "Another ADVIS tab"),
+          payload: data.payload || {},
+          source: "tab",
+          fromTabId: String(data.fromTabId || ""),
+          requestId
+        });
+        addActivity("TAB CONTROL REQUEST", String(data.fromTabName || "Another tab") + " requested " + String(data.payload?.action || "control"));
+      } else if (data.type === "CONTROL_RESULT" && data.toTabId === tabId) {
+        if (data.status === "APPROVED") {
+          window.dispatchEvent(new CustomEvent("advis-remote-control-approved", { detail: data.payload || {} }));
+          addActivity("TAB CONTROL APPROVED", "The selected ADVIS tab accepted the control request.");
+        } else {
+          addActivity("TAB CONTROL REJECTED", "The selected ADVIS tab declined the request.");
+        }
+      } else if (data.type === "TAB_GOODBYE") {
+        setLocalTabs(previous => previous.filter(tab => tab.id !== data.tabId));
+      }
+    };
+    channel.addEventListener("message", onMessage);
+    announce();
+    const heartbeat = window.setInterval(() => {
+      announce();
+      const cutoff = Date.now() - 7000;
+      setLocalTabs(previous => previous.filter(tab => tab.lastSeen > cutoff));
+    }, 2000);
+    return () => {
+      channel.postMessage({ type: "TAB_GOODBYE", tabId });
+      window.clearInterval(heartbeat);
+      channel.removeEventListener("message", onMessage);
+      channel.close();
+      tabChannel.current = null;
+    };
+  }, [tabId, deviceName, addActivity]);
 
   useEffect(() => {
     localStorage.setItem(DEVICE_KEY, deviceId);
@@ -266,8 +349,36 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     }
   };
 
+  const sendTabControl = () => {
+    const targetTabId = selectedDevice.startsWith("tab:") ? selectedDevice.slice(4) : "";
+    if (!targetTabId || !tabChannel.current) return;
+    const payload = controlAction === "DISPLAY_MODEL"
+      ? { action: controlAction, modelId }
+      : controlAction === "SET_MODE"
+        ? { action: controlAction, mode: spatialMode }
+        : controlAction === "OPEN_VIEW"
+          ? { action: controlAction, view: targetView }
+          : controlAction === "SPEAK"
+            ? { action: controlAction, text: speakText.slice(0, 500) }
+            : { action: controlAction };
+    const requestId = randomId();
+    tabChannel.current.postMessage({
+      type: "CONTROL_REQUEST",
+      toTabId: targetTabId,
+      fromTabId: tabId,
+      fromTabName: deviceName + " · ADVIS tab",
+      requestId,
+      payload
+    });
+    addActivity("CONTROL REQUEST SENT", controlAction.replace(/_/g, " ") + " → " + (localTabs.find(tab => tab.id === targetTabId)?.name || "ADVIS tab"));
+  };
+
   const sendControl = async () => {
     if (!selectedDevice) return;
+    if (selectedDevice.startsWith("tab:")) {
+      sendTabControl();
+      return;
+    }
     const payload = controlAction === "DISPLAY_MODEL"
       ? { action: controlAction, modelId }
       : controlAction === "SET_MODE"
@@ -288,11 +399,20 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const approveControl = async (approved: boolean) => {
     if (!incoming) return;
     try {
-      if (approved) {
+      if (incoming.source === "tab") {
+        tabChannel.current?.postMessage({
+          type: "CONTROL_RESULT",
+          toTabId: incoming.fromTabId,
+          requestId: incoming.requestId,
+          status: approved ? "APPROVED" : "REJECTED",
+          payload: approved ? incoming.payload : undefined
+        });
+        addActivity(approved ? "TAB CONTROL ALLOWED" : "TAB CONTROL REJECTED", incoming.fromDeviceName);
+      } else if (approved) {
         window.dispatchEvent(new CustomEvent("advis-remote-control-approved", { detail: incoming.payload }));
         await acknowledge(incoming.id, "COMPLETED", "Approved by the device owner.");
         addActivity("CONTROL APPROVED", incoming.payload.action.replace(/_/g, " "));
-      } else {
+      } else if (incoming.source !== "tab") {
         await acknowledge(incoming.id, "REJECTED", "Rejected on the target device.");
         addActivity("CONTROL REJECTED", incoming.fromDeviceName);
       }
@@ -329,8 +449,50 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
 
       {error && <div className="p-3 rounded border border-red-400/30 bg-red-950/40 text-red-200 text-xs flex gap-2"><AlertTriangle size={16}/>{error}<button className="ml-auto" onClick={() => setError("")}><X size={14}/></button></div>}
 
+      <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="text-cyan-300 text-xs tracking-widest">OPEN ADVIS BROWSER TABS</h4>
+            <p className="text-[10px] text-cyan-500/60 mt-1">Tabs on this browser and this ADVIS address appear automatically.</p>
+          </div>
+          <span className="text-[10px] text-green-300">{localTabs.length} ONLINE</span>
+        </div>
+        <div className="space-y-2">
+          {localTabs.map(tab => (
+            <button key={tab.id} onClick={() => setSelectedDevice("tab:" + tab.id)} className={"w-full flex items-center justify-between gap-3 p-3 rounded border text-left " + (selectedDevice === "tab:" + tab.id ? "border-cyan-300/60 bg-cyan-500/10" : "border-cyan-500/15 bg-slate-950/60")}>
+              <span className="flex items-center gap-3 min-w-0">
+                <Monitor size={18} className="text-cyan-300"/>
+                <span className="min-w-0">
+                  <span className="block text-xs text-cyan-100 truncate">{tab.name}</span>
+                  <span className="block text-[10px] text-cyan-500/60">Same browser · ADVIS tab</span>
+                </span>
+              </span>
+              <span className="text-[9px] text-green-300">ONLINE</span>
+            </button>
+          ))}
+          {!localTabs.length && <p className="text-xs text-cyan-500/60">No other ADVIS tabs detected. Open ADVIS in another tab to see it here.</p>}
+        </div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <select value={controlAction} onChange={e => setControlAction(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs">
+            <option value="DISPLAY_MODEL">Display a 3D model</option>
+            <option value="CLOSE_MODEL">Close current model</option>
+            <option value="SET_MODE">Set spatial mode</option>
+            <option value="OPEN_VIEW">Open an ADVIS panel</option>
+            <option value="SPEAK">Speak a message</option>
+          </select>
+          {controlAction === "DISPLAY_MODEL" && <input value={modelId} onChange={e => setModelId(e.target.value)} placeholder="Model ID (e.g. v8_engine)" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
+          {controlAction === "SET_MODE" && <select value={spatialMode} onChange={e => setSpatialMode(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"><option>INSPECTION</option><option>SHOWCASE</option><option>DEMO</option><option>EXPLODED</option></select>}
+          {controlAction === "OPEN_VIEW" && <select value={targetView} onChange={e => setTargetView(e.target.value)} className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"><option value="home">Home</option><option value="memory">Memory</option><option value="history">History</option><option value="projects">Projects</option><option value="devices">Devices</option><option value="status">System Status</option><option value="settings">Settings</option></select>}
+          {controlAction === "SPEAK" && <input value={speakText} onChange={e => setSpeakText(e.target.value)} maxLength={500} placeholder="Text for the other tab to speak" className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs"/>}
+          <button onClick={sendControl} disabled={!selectedDevice.startsWith("tab:")} className="bg-cyan-500/15 border border-cyan-400/40 rounded p-2 text-xs disabled:opacity-40">REQUEST TAB CONTROL</button>
+        </div>
+        <p className="text-[10px] text-cyan-500/60">The other tab must approve before its ADVIS interface responds. This first stage controls ADVIS inside the tab, not the browser chrome or the whole operating system.</p>
+      </div>
+
       {!networkId || !deviceToken ? (
-        <div className="grid md:grid-cols-2 gap-4">
+        <details className="bg-black/30 border border-cyan-500/15 rounded-xl p-4">
+          <summary className="cursor-pointer text-[10px] tracking-widest text-cyan-400">CROSS-DEVICE NETWORK SETUP (NEXT STAGE)</summary>
+          <div className="grid md:grid-cols-2 gap-4 mt-3">
           <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
             <div className="flex items-center gap-2 text-cyan-300"><Radio size={18}/> CREATE PRIVATE NETWORK</div>
             <p className="text-xs text-cyan-100/60 leading-relaxed">Create your own network on this device, then share its invitation link with your other ADVIS installations.</p>
@@ -344,7 +506,8 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
             <input value={inviteInput} onChange={e => setInviteInput(e.target.value)} placeholder="Paste ADVIS invitation link..." className="bg-slate-950 border border-cyan-500/30 rounded p-2 text-xs outline-none focus:border-cyan-300"/>
             <button disabled={busy || !inviteInput.trim()} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-2 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING..." : "JOIN NETWORK"}</button>
           </div>
-        </div>
+          </div>
+        </details>
       ) : (
         <>
           <div className="bg-black/50 border border-cyan-500/20 rounded-xl p-4 flex flex-col gap-3">
