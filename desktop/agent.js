@@ -201,7 +201,16 @@
   }
   async function heartbeat() {
     if (!credentials || !credentials.networkId || !credentials.deviceToken) return;
-    await apiJson("/api/network/heartbeat", { method: "POST", body: JSON.stringify({ networkId: credentials.networkId, deviceId: credentials.deviceId, name: config.deviceName, platform: "ADVIS Desktop Agent · " + config.platform + " " + config.architecture }) });
+    const inputSupported = Boolean(config.input && config.input.supported);
+    const capabilities = ["FULL_DESKTOP_CAPTURE"];
+    if (inputSupported) capabilities.push("POINTER", "CLICK", "KEYBOARD", "SCROLL");
+    if (config.allowUnattended) capabilities.push("UNATTENDED_DESKTOP");
+    await apiJson("/api/network/heartbeat", { method: "POST", body: JSON.stringify({
+      networkId: credentials.networkId, deviceId: credentials.deviceId,
+      name: config.deviceName, platform: "ADVIS Desktop Agent · " + config.platform + " " + config.architecture,
+      agentVersion: config.agentVersion || "unknown", capabilities,
+      unattendedReady: config.allowUnattended === true, foreground: config.foreground === true
+    }) });
   }
   async function pollCommands() {
     if (!credentials || !credentials.networkId || !credentials.deviceToken) return;
@@ -210,24 +219,42 @@
   }
   function startLoops() {
     if (!config || !config.enrolled || pollTimer || heartbeatTimer) return;
-    const safeRun = async fn => {
-      try { await fn(); }
-      catch (error) {
-        if (Number(error.status) === 401 || Number(error.status) === 410 || Number(error.status) === 403) {
-          if (pollTimer) clearInterval(pollTimer);
-          if (heartbeatTimer) clearInterval(heartbeatTimer);
-          pollTimer = null;
-          heartbeatTimer = null;
-          await stopSession(false);
-          status("This device's network access was revoked or is no longer valid. The desktop session has been stopped. Re-enrol with a fresh owner invitation.", "danger");
-        } else {
-          status("Cloud sync issue: " + (error.message || "Network unavailable."), "warn");
-        }
-      }
+    let stopped = false;
+    let pollDelay = 1800;
+    let heartbeatDelay = 5000;
+    const stopLoops = () => {
+      stopped = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      pollTimer = null;
+      heartbeatTimer = null;
     };
-    void safeRun(heartbeat); void safeRun(pollCommands);
-    heartbeatTimer = setInterval(() => void safeRun(heartbeat), 5000);
-    pollTimer = setInterval(() => void safeRun(pollCommands), 1800);
+    const handleFailure = async (error, lane) => {
+      const statusCode = Number(error.status);
+      if (statusCode === 401 || statusCode === 410 || statusCode === 403) {
+        stopLoops();
+        await stopSession(false);
+        status("This device's network access was revoked or is no longer valid. The desktop session has been stopped. Re-enrol with a fresh owner invitation.", "danger");
+        return;
+      }
+      if (lane === "poll") pollDelay = Math.min(30000, Math.max(1800, pollDelay * 2));
+      else heartbeatDelay = Math.min(60000, Math.max(5000, heartbeatDelay * 2));
+      status("Cloud sync issue: " + (error.message || "Network unavailable.") + " · retrying automatically.", "warn");
+    };
+    const runPoll = async () => {
+      if (stopped) return;
+      try { await pollCommands(); pollDelay = 1800; }
+      catch (error) { await handleFailure(error, "poll"); }
+      if (!stopped) pollTimer = setTimeout(runPoll, pollDelay);
+    };
+    const runHeartbeat = async () => {
+      if (stopped) return;
+      try { await heartbeat(); heartbeatDelay = 5000; }
+      catch (error) { await handleFailure(error, "heartbeat"); }
+      if (!stopped) heartbeatTimer = setTimeout(runHeartbeat, heartbeatDelay);
+    };
+    void runPoll();
+    void runHeartbeat();
   }
   async function init() {
     try {

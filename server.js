@@ -451,6 +451,12 @@ async function createApp() {
         ...auth.device,
         name: String(req.body.name || auth.device.name || "ADVIS Device").slice(0, 64),
         platform: String(req.body.platform || auth.device.platform || "Unknown").slice(0, 80),
+        agentVersion: String(req.body.agentVersion || auth.device.agentVersion || "web").slice(0, 32),
+        capabilities: Array.isArray(req.body.capabilities)
+          ? Array.from(new Set(req.body.capabilities.map(value => String(value).slice(0, 32)).filter(Boolean))).slice(0, 16)
+          : (Array.isArray(auth.device.capabilities) ? auth.device.capabilities : []),
+        unattendedReady: typeof req.body.unattendedReady === "boolean" ? req.body.unattendedReady : auth.device.unattendedReady === true,
+        foreground: typeof req.body.foreground === "boolean" ? req.body.foreground : auth.device.foreground !== false,
         lastSeen: Date.now(), status: "ONLINE"
       };
       await networkStore.setNetworkDevice(auth.networkId, nextDevice);
@@ -471,6 +477,10 @@ async function createApp() {
         id: device.id, name: device.name, platform: device.platform,
         role: device.role === "OWNER" ? "OWNER" : "MEMBER",
         createdAt: device.createdAt, lastSeen: device.lastSeen,
+        agentVersion: device.agentVersion || "unknown",
+        capabilities: Array.isArray(device.capabilities) ? device.capabilities : [],
+        unattendedReady: device.unattendedReady === true,
+        foreground: device.foreground !== false,
         status: now - Number(device.lastSeen || 0) < 35_000 ? "ONLINE" : "OFFLINE",
         current: device.id === auth.deviceId
       })));

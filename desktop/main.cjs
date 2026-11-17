@@ -22,7 +22,7 @@ function loadConfig() {
 function publicConfig() {
   let screenPermission = "managed-by-operating-system";
   if (process.platform === "darwin") { try { screenPermission = systemPreferences.getMediaAccessStatus("screen"); } catch (_) {} }
-  return { endpoint: config.endpoint, deviceId: config.deviceId, deviceName: config.deviceName, networkId: config.networkId, enrolled: Boolean(config.networkId && config.deviceToken), allowUnattended: config.allowUnattended, startAtLogin: config.startAtLogin, secureStorageAvailable: safeStorage.isEncryptionAvailable(), screenPermission, sessionActive, platform: process.platform, architecture: process.arch, input: getNativeInputCapabilities(process.platform) };
+  return { endpoint: config.endpoint, deviceId: config.deviceId, deviceName: config.deviceName, networkId: config.networkId, enrolled: Boolean(config.networkId && config.deviceToken), allowUnattended: config.allowUnattended, startAtLogin: config.startAtLogin, secureStorageAvailable: safeStorage.isEncryptionAvailable(), screenPermission, sessionActive, foreground: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()), agentVersion: app.getVersion(), platform: process.platform, architecture: process.arch, input: getNativeInputCapabilities(process.platform) };
 }
 function saveConfig(next) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error("OS secure storage is unavailable.");
