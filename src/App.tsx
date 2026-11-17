@@ -948,7 +948,7 @@ export default function App() {
                   <input
                     type="password"
                     value={ownerPairingCode}
-                    onChange={(value) => setOwnerPairingCode(value)}
+                    onChange={(event) => setOwnerPairingCode(event.target.value)}
                     autoComplete="off"
                     placeholder="Private device-pairing code"
                     className="w-full rounded-lg border border-cyan-300/20 bg-black/40 px-4 py-3 text-sm tracking-widest text-white outline-none transition focus:border-cyan-300/60"
