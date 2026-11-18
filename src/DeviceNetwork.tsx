@@ -314,7 +314,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       const result = await readJson(await fetch("/api/network/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ networkId: id, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent })
+        body: JSON.stringify({ networkId: id, deviceId, name: deviceName.trim() || deviceLabel(), platform: "ADVIS Browser Controller · " + navigator.userAgent })
       }));
       saveCredentials(id, result.deviceToken, result.ownerToken);
       addActivity("PRIVATE NETWORK CREATED", "This device is the owner. Generate a one-time invite for each additional device.");
@@ -354,7 +354,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
       const result = await readJson(await fetch("/api/network/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ networkId: id, invitationCode: code, deviceId, name: deviceName.trim() || deviceLabel(), platform: navigator.userAgent })
+        body: JSON.stringify({ networkId: id, invitationCode: code, deviceId, name: deviceName.trim() || deviceLabel(), platform: "ADVIS Browser Controller · " + navigator.userAgent })
       }));
       saveCredentials(id, result.deviceToken);
       setInviteInput("");
@@ -913,17 +913,17 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
           {inviteInput ? (
             <>
               <div className="flex items-center gap-2 text-cyan-300"><ShieldCheck size={18}/> JOIN A TRUSTED ADVIS NETWORK</div>
-              <p className="text-xs text-cyan-100/70 leading-relaxed">This invitation came from someone who already owns an ADVIS network. Joining makes this installation visible to that network. The owner still needs your approval before controlling this ADVIS tab.</p>
+              <p className="text-xs text-cyan-100/70 leading-relaxed">This is a browser-only controller setup. No Tailscale or remote-control software is installed on this computer, and no ADVIS account sign-in is required. The one-time invitation enrolls this browser in your private device network. Only join on a browser profile you control; on a shared computer, revoke this browser afterward.</p>
               <button disabled={busy} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING SECURELY..." : "JOIN TRUSTED NETWORK"}</button>
               <button onClick={() => setInviteInput("")} className="text-[10px] text-cyan-500/60 hover:text-cyan-300">CANCEL INVITATION</button>
             </>
           ) : (
             <>
               <div className="flex items-center gap-2 text-cyan-300"><Radio size={18}/> CONNECT THIS ADVIS DEVICE</div>
-              <p className="text-xs text-cyan-100/70 leading-relaxed">On your first device, create your private network. On each additional device, join it once with the owner's invitation. After that, every enrolled device appears automatically whenever it is online—wherever it is in the world.</p>
+              <p className="text-xs text-cyan-100/70 leading-relaxed">Open ADVIS in any modern browser to use it as a remote controller—no client installation and no conventional account login. Enroll this browser once with an invitation from your owner device. After enrollment, your online personal devices appear here automatically. On shared computers, revoke the browser device when you finish.</p>
               <input value={inviteInput} onChange={event => setInviteInput(event.target.value)} placeholder="Paste your trusted ADVIS invitation link here" className="bg-slate-950 border border-cyan-500/30 rounded-lg p-3 text-xs outline-none focus:border-cyan-300"/>
               <div className="grid sm:grid-cols-2 gap-2">
-                <button disabled={busy || !inviteInput.trim()} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING..." : "JOIN MY TRUSTED NETWORK"}</button>
+                <button disabled={busy || !inviteInput.trim()} onClick={() => joinNetwork(inviteInput)} className="bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "CONNECTING..." : "ENROLL THIS BROWSER"}</button>
                 <button disabled={busy} onClick={createNetwork} className="bg-slate-900 border border-cyan-500/25 rounded p-3 text-xs tracking-widest disabled:opacity-40">{busy ? "INITIALISING..." : "CREATE FIRST NETWORK"}</button>
               </div>
             </>
