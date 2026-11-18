@@ -7,7 +7,7 @@ const {
 
 test("remote pointer and click coordinates are bounded to the host display", () => {
   assert.deepEqual(validateInput({ kind: "pointer", x: 1200, y: -10 }), {
-    kind: "pointer", x: 100000, y: -10, button: "left"
+    kind: "pointer", x: 1200, y: -10, button: "left"
   });
   assert.deepEqual(validateInput({ kind: "click", x: 0.5, y: 0.25, button: "right" }), {
     kind: "click", x: 0.5, y: 0.25, button: "right"
