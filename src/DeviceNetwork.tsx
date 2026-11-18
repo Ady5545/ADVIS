@@ -180,6 +180,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>());
+  const connectionTimeoutsRef = useRef(new Map<string, number>());
   const controlChannelsRef = useRef(new Map<string, RTCDataChannel>());
   const activeShareRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState("");
@@ -489,6 +490,11 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     sendCommand(targetDeviceId, "RTC_SIGNAL", { sessionId, type, ...extra }), [sendCommand]);
 
   const closeRemotePeer = useCallback((sessionId: string) => {
+    const timeout = connectionTimeoutsRef.current.get(sessionId);
+    if (timeout !== undefined) {
+      window.clearTimeout(timeout);
+      connectionTimeoutsRef.current.delete(sessionId);
+    }
     const peer = peerConnectionsRef.current.get(sessionId);
     if (peer) {
       peer.ontrack = null;
@@ -672,12 +678,32 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
           setRemoteSessionStatus(isDesktopAgent ? "LIVE · FULL DESKTOP CONNECTED" : "LIVE · ADVIS TAB CONNECTED");
         }
       };
+      const connectionTimeout = window.setTimeout(() => {
+        const activePeer = peerConnectionsRef.current.get(sessionId);
+        if (activePeer && activePeer.connectionState !== "connected") {
+          setError("The remote device did not establish a direct connection within 45 seconds. Its agent may be offline, or the network may require a TURN relay that is not configured.");
+          addActivity("REMOTE SESSION TIMED OUT", "No direct WebRTC path was established before the connection deadline.");
+          void sendRtcSignal(selectedDevice, sessionId, "END", { reason: "Connection timed out before WebRTC became connected." }).catch(() => {});
+          closeRemotePeer(sessionId);
+        }
+      }, 45000);
+      connectionTimeoutsRef.current.set(sessionId, connectionTimeout);
+
       peer.onconnectionstatechange = () => {
-        if (peer.connectionState === "failed") {
-          setRemoteSessionStatus("Connection failed · network relay may be required");
-          addActivity("REMOTE SESSION FAILED", "A direct browser connection could not be established.");
+        if (peer.connectionState === "connected") {
+          const timeout = connectionTimeoutsRef.current.get(sessionId);
+          if (timeout !== undefined) {
+            window.clearTimeout(timeout);
+            connectionTimeoutsRef.current.delete(sessionId);
+          }
+          setRemoteSessionStatus(isDesktopAgent ? "Secure peer connected · waiting for desktop video" : "Secure peer connected · waiting for ADVIS tab video");
+        } else if (peer.connectionState === "failed") {
+          setError("The WebRTC connection failed. The school or host network may be blocking direct peer traffic; STUN alone cannot relay the desktop stream.");
+          addActivity("REMOTE SESSION FAILED", "ICE connectivity checks did not find a working direct path.");
+          void sendRtcSignal(selectedDevice, sessionId, "END", { reason: "The WebRTC peer connection failed." }).catch(() => {});
+          closeRemotePeer(sessionId);
         } else if (peer.connectionState === "disconnected") {
-          setRemoteSessionStatus("Connection interrupted");
+          setRemoteSessionStatus("Connection interrupted · attempting recovery");
         }
       };
       const channel = peer.createDataChannel("advis-remote-input");
