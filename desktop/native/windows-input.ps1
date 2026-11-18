@@ -23,6 +23,12 @@ switch ($Action) {
       $wheelData = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$ticks),0)
       [AdvisNativeInput]::mouse_event([AdvisNativeInput]::WHEEL,0,0,$wheelData,[UIntPtr]::Zero)
     }
+    if ($DeltaX -ne 0) {
+      $ticks = [int](120 * [Math]::Min(10,[Math]::Ceiling([Math]::Abs($DeltaX)/100)))
+      if ($DeltaX -gt 0) { $ticks = -$ticks }
+      $wheelData = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$ticks),0)
+      [AdvisNativeInput]::mouse_event([uint32]0x01000,0,0,$wheelData,[UIntPtr]::Zero)
+    }
   }
   "key" {
     $special=@{ Enter=0x0D; Backspace=0x08; Tab=0x09; Escape=0x1B; ArrowUp=0x26; ArrowDown=0x28; ArrowLeft=0x25; ArrowRight=0x27; Delete=0x2E; Home=0x24; End=0x23; PageUp=0x21; PageDown=0x22; " "=0x20 }
