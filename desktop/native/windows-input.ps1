@@ -16,7 +16,14 @@ switch ($Action) {
     if ($Button -eq "right") { [AdvisNativeInput]::mouse_event([AdvisNativeInput]::RIGHTDOWN,0,0,0,[UIntPtr]::Zero); [AdvisNativeInput]::mouse_event([AdvisNativeInput]::RIGHTUP,0,0,0,[UIntPtr]::Zero) }
     else { [AdvisNativeInput]::mouse_event([AdvisNativeInput]::LEFTDOWN,0,0,0,[UIntPtr]::Zero); [AdvisNativeInput]::mouse_event([AdvisNativeInput]::LEFTUP,0,0,0,[UIntPtr]::Zero) }
   }
-  "scroll" { if ($DeltaY -ne 0) { $ticks=[uint32](120 * [Math]::Min(10,[Math]::Ceiling([Math]::Abs($DeltaY)/100))); if ($DeltaY -gt 0) { $ticks=[uint32](-1 * [int]$ticks) }; [AdvisNativeInput]::mouse_event([AdvisNativeInput]::WHEEL,0,0,$ticks,[UIntPtr]::Zero) } }
+  "scroll" {
+    if ($DeltaY -ne 0) {
+      $ticks = [int](120 * [Math]::Min(10,[Math]::Ceiling([Math]::Abs($DeltaY)/100)))
+      if ($DeltaY -lt 0) { $ticks = -$ticks }
+      $wheelData = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$ticks),0)
+      [AdvisNativeInput]::mouse_event([AdvisNativeInput]::WHEEL,0,0,$wheelData,[UIntPtr]::Zero)
+    }
+  }
   "key" {
     $special=@{ Enter=0x0D; Backspace=0x08; Tab=0x09; Escape=0x1B; ArrowUp=0x26; ArrowDown=0x28; ArrowLeft=0x25; ArrowRight=0x27; Delete=0x2E; Home=0x24; End=0x23; PageUp=0x21; PageDown=0x22; " "=0x20 }
     if ($Key.Length -eq 1) { $code=[int][char]$Key; [AdvisNativeInput]::keybd_event(0,[byte]$code,[AdvisNativeInput]::UNICODE,[UIntPtr]::Zero); [AdvisNativeInput]::keybd_event(0,[byte]$code,([AdvisNativeInput]::UNICODE -bor [AdvisNativeInput]::KEYUP),[UIntPtr]::Zero) }
