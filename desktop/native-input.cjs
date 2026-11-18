@@ -5,7 +5,7 @@ function clamp(value, min, max) { const n = Number(value); if (!Number.isFinite(
 function validateInput(input) {
   const kind = String(input.kind || "");
   if (!["pointer", "click", "scroll", "key"].includes(kind)) throw new Error("Unsupported desktop input event.");
-  if (kind === "pointer" || kind === "click") return { kind, x: clamp(input.x, 0, 100000), y: clamp(input.y, 0, 100000), button: input.button === "right" ? "right" : "left" };
+  if (kind === "pointer" || kind === "click") return { kind, x: clamp(input.x, -100000, 100000), y: clamp(input.y, -100000, 100000), button: input.button === "right" ? "right" : "left" };
   if (kind === "scroll") return { kind, x: clamp(input.x || 0, -1500, 1500), y: clamp(input.y || 0, -1500, 1500) };
   const key = String(input.key || "");
   if (key.length === 1) return { kind: "key", key };
