@@ -18,6 +18,7 @@ const {
   createTurnCredentials
 } = require("./src/DeviceNetworkSecurity.cjs");
 const { validateSessionSignal } = require("./src/DeviceNetworkSessionSecurity.cjs");
+const { fetchCloudflareIceServers } = require("./src/CloudflareTurn.cjs");
 
 async function createApp() {
   const app = express();
@@ -514,6 +515,36 @@ async function createApp() {
       const auth = await authenticateNetworkDevice(req, res);
       if (!auth) return;
       if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "get_ice_config", 30, 60_000)) return;
+
+      const cloudflareKeyId = String(process.env.ADVIS_CLOUDFLARE_TURN_KEY_ID || "").trim();
+      const cloudflareKeyToken = String(process.env.ADVIS_CLOUDFLARE_TURN_KEY_TOKEN || "").trim();
+      const cloudflareConfigured = Boolean(cloudflareKeyId && cloudflareKeyToken);
+      const cloudflarePartiallyConfigured = Boolean(cloudflareKeyId || cloudflareKeyToken);
+
+      if (cloudflarePartiallyConfigured && !cloudflareConfigured) {
+        return res.status(503).json({
+          error: "Cloudflare TURN configuration is incomplete.",
+          code: "TURN_PROVIDER_MISCONFIGURED"
+        });
+      }
+
+      if (cloudflareConfigured) {
+        const ttlSeconds = 60 * 60;
+        const iceServers = await fetchCloudflareIceServers({
+          keyId: cloudflareKeyId,
+          keyToken: cloudflareKeyToken,
+          ttlSeconds
+        });
+        return res.json({
+          iceServers,
+          relayConfigured: true,
+          relayProvider: "CLOUDFLARE",
+          credentialsExpireAt: Date.now() + ttlSeconds * 1000
+        });
+      }
+
+      // Backwards-compatible option for a self-hosted TURN server using
+      // the existing time-limited HMAC credential format.
       const urls = String(process.env.ADVIS_TURN_URL || "").split(",").map(value => value.trim()).filter(Boolean);
       const secret = process.env.ADVIS_TURN_SECRET || "";
       const iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -521,10 +552,20 @@ async function createApp() {
         const credentials = createTurnCredentials({ secret, deviceId: auth.deviceId, ttlSeconds: 600 });
         if (credentials) iceServers.push({ urls, username: credentials.username, credential: credentials.credential });
       }
-      return res.json({ iceServers, relayConfigured: iceServers.length > 1, credentialsExpireAt: iceServers.length > 1 ? createTurnCredentials({ secret, deviceId: auth.deviceId, ttlSeconds: 600 }).expiresAt : null });
+      return res.json({
+        iceServers,
+        relayConfigured: iceServers.length > 1,
+        relayProvider: iceServers.length > 1 ? "CUSTOM_TURN" : null,
+        credentialsExpireAt: iceServers.length > 1
+          ? createTurnCredentials({ secret, deviceId: auth.deviceId, ttlSeconds: 600 }).expiresAt
+          : null
+      });
     } catch (error) {
-      console.error("[ADVIS Network] ICE config:", error);
-      return res.status(503).json({ error: "Could not prepare secure session connectivity." });
+      console.error("[ADVIS Network] ICE config:", error.message || "TURN credential request failed");
+      return res.status(503).json({
+        error: "Could not prepare secure session connectivity.",
+        code: "ICE_CONFIGURATION_FAILED"
+      });
     }
   });
 
