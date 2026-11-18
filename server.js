@@ -329,7 +329,14 @@ async function createApp() {
   // the still-enrolled peer so an already-open media/data connection is closed.
   async function endNetworkSessionsForDevice(networkId, revokedDeviceId, reason) {
     if (!networkStore?.listNetworkSessions || !networkStore?.getNetworkSession) return;
-    const sessions = await networkStore.listNetworkSessions(networkId);
+    let sessions;
+    try {
+      sessions = await networkStore.listNetworkSessions(networkId);
+    } catch (error) {
+      console.warn("[ADVIS Network] Could not enumerate sessions during revocation:", error.message || error);
+      return;
+    }
+
     for (const summary of sessions) {
       const isController = summary.controllerDeviceId === revokedDeviceId;
       const isTarget = summary.targetDeviceId === revokedDeviceId;
@@ -339,39 +346,44 @@ async function createApp() {
       const peerDeviceId = isController ? summary.targetDeviceId : summary.controllerDeviceId;
       if (!sessionId || !safeDeviceId(peerDeviceId)) continue;
 
-      const now = Date.now();
-      const current = await networkStore.getNetworkSession(networkId, sessionId);
-      if (!current || current.status === "ENDED") continue;
-
       try {
-        await networkStore.updateNetworkSession(networkId, {
-          ...current,
-          status: "ENDED",
-          endedAt: now,
-          updatedAt: now,
-          lastSignalAt: now
-        });
-      } catch (error) {
-        // Continue with the peer notification even if a concurrent session
-        // update won the race; the revoked device must not retain a live peer.
-        console.warn("[ADVIS Network] session end update:", error.message || error);
-      }
+        const now = Date.now();
+        const current = await networkStore.getNetworkSession(networkId, sessionId);
+        if (!current || current.status === "ENDED") continue;
 
-      const peer = await networkStore.getNetworkDevice(networkId, peerDeviceId);
-      if (!peer) continue;
-      const command = {
-        id: "cmd_" + crypto.randomBytes(18).toString("hex"),
-        networkId,
-        fromDeviceId: revokedDeviceId,
-        fromDeviceName: "ADVIS Network Security",
-        targetDeviceId: peerDeviceId,
-        kind: "RTC_SIGNAL",
-        payload: { sessionId, type: "END", reason: String(reason || "Device authorization was revoked.") },
-        status: "PENDING",
-        createdAt: now,
-        expiresAt: now + 120_000
-      };
-      await networkStore.createNetworkCommand(networkId, peerDeviceId, command);
+        try {
+          await networkStore.updateNetworkSession(networkId, {
+            ...current,
+            status: "ENDED",
+            endedAt: now,
+            updatedAt: now,
+            lastSignalAt: now
+          });
+        } catch (error) {
+          // Continue with peer notification even if a concurrent session
+          // update won the race; revocation itself must not depend on this.
+          console.warn("[ADVIS Network] Session state update during revocation:", error.message || error);
+        }
+
+        const peer = await networkStore.getNetworkDevice(networkId, peerDeviceId);
+        if (!peer) continue;
+        const command = {
+          id: "cmd_" + crypto.randomBytes(18).toString("hex"),
+          networkId,
+          fromDeviceId: revokedDeviceId,
+          fromDeviceName: "ADVIS Network Security",
+          targetDeviceId: peerDeviceId,
+          kind: "RTC_SIGNAL",
+          payload: { sessionId, type: "END", reason: String(reason || "Device authorization was revoked.") },
+          status: "PENDING",
+          createdAt: now,
+          expiresAt: now + 120_000
+        };
+        await networkStore.createNetworkCommand(networkId, peerDeviceId, command);
+      } catch (error) {
+        // Removing the device credential remains the authoritative action.
+        console.warn("[ADVIS Network] Could not notify peer while ending a revoked session:", error.message || error);
+      }
     }
   }
 
