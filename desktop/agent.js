@@ -81,6 +81,13 @@
       const base = safeEndpoint(endpoint.value);
       const deviceName = String(name.value || (config && config.deviceName) || "ADVIS Desktop").slice(0,48);
 
+      // Electron's capture handler reads config.displaySourceId. Save the
+      // current selection before requesting the stream so the chosen monitor
+      // is actually the one that gets captured.
+      if (displaySelect.value && (!config || config.displaySourceId !== displaySelect.value)) {
+        config = await persist({ endpoint: base, deviceName, displaySourceId: displaySelect.value });
+      }
+
       // Capture preparation is initiated by this local button click. Remote
       // offers later reuse the already-prepared stream instead of opening a
       // new screen-share picker for every Connect request.
