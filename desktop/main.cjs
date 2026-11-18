@@ -96,8 +96,26 @@ ipcMain.handle("agent:input", async (_event, input) => {
   if (["pointer", "click"].includes(normalized.kind)) {
     const x = Number(normalized.x), y = Number(normalized.y);
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) throw new Error("Remote pointer coordinates are invalid.");
-    const size = screen.getPrimaryDisplay().size;
-    normalized.x = Math.round(x * size.width); normalized.y = Math.round(y * size.height);
+
+    if (process.platform === "win32") {
+      const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+      const selectedSource = sources.find(source => source.id === config.displaySourceId);
+      const display = selectedSource?.display_id
+        ? screen.getAllDisplays().find(item => String(item.id) === String(selectedSource.display_id))
+        : null;
+      const targetDisplay = display || screen.getPrimaryDisplay();
+      const dipPoint = {
+        x: targetDisplay.bounds.x + x * targetDisplay.bounds.width,
+        y: targetDisplay.bounds.y + y * targetDisplay.bounds.height
+      };
+      const physicalPoint = screen.dipToScreenPoint(dipPoint);
+      normalized.x = physicalPoint.x;
+      normalized.y = physicalPoint.y;
+    } else {
+      const size = screen.getPrimaryDisplay().size;
+      normalized.x = Math.round(x * size.width);
+      normalized.y = Math.round(y * size.height);
+    }
   }
   return dispatchNativeInput(normalized, process.platform, nativeResourcePath());
 });
