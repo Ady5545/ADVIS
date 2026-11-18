@@ -903,7 +903,7 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
         window.dispatchEvent(new CustomEvent("advis-remote-control-approved", { detail: incoming.payload }));
         await acknowledge(incoming.id, "COMPLETED", "Approved by the device owner.");
         addActivity("CONTROL APPROVED", incoming.payload.action.replace(/_/g, " "));
-      } else {
+      } else if (incoming.source !== "tab") {
         await acknowledge(incoming.id, "REJECTED", "Rejected on the target device.");
         addActivity("CONTROL REJECTED", incoming.fromDeviceName);
       }
