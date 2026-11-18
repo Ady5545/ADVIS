@@ -651,6 +651,10 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     const sessionId = "sess_" + randomId();
     const selectedTarget = devices.find(item => item.id === selectedDevice);
     const isDesktopAgent = Boolean(selectedTarget?.platform.includes("ADVIS Desktop Agent"));
+    if (isDesktopAgent && !selectedTarget?.unattendedReady) {
+      setError("This desktop agent is enrolled but not ready to share. Open ADVIS Desktop Agent on that computer, enable unattended desktop access locally, choose the display, and save its settings first.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -768,17 +772,39 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
   const sendRemotePointer = (event: React.PointerEvent<HTMLDivElement>, kind: "pointer" | "click") => {
     const channel = controlChannelsRef.current.get(remoteSessionId);
     if (!channel || channel.readyState !== "open") return;
+
+    // The video uses object-contain. Translate pointer coordinates into the
+    // actual displayed screen image, not the surrounding letterbox area.
     const rect = event.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
-    channel.send(JSON.stringify({ kind, x, y }));
+    const video = remoteVideoRef.current;
+    const sourceWidth = video?.videoWidth || rect.width;
+    const sourceHeight = video?.videoHeight || rect.height;
+    const scale = Math.min(rect.width / Math.max(1, sourceWidth), rect.height / Math.max(1, sourceHeight));
+    const renderedWidth = sourceWidth * scale;
+    const renderedHeight = sourceHeight * scale;
+    const imageLeft = rect.left + (rect.width - renderedWidth) / 2;
+    const imageTop = rect.top + (rect.height - renderedHeight) / 2;
+    const localX = event.clientX - imageLeft;
+    const localY = event.clientY - imageTop;
+    if (localX < 0 || localY < 0 || localX > renderedWidth || localY > renderedHeight) return;
+
+    const x = Math.max(0, Math.min(1, localX / Math.max(1, renderedWidth)));
+    const y = Math.max(0, Math.min(1, localY / Math.max(1, renderedHeight)));
+    channel.send(JSON.stringify({
+      kind, x, y,
+      ...(kind === "click" ? { button: event.button === 2 ? "right" : "left" } : {})
+    }));
   };
 
   const sendRemoteKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const channel = controlChannelsRef.current.get(remoteSessionId);
     if (!channel || channel.readyState !== "open") return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if (event.key.length === 1 || ["Backspace", "Enter"].includes(event.key)) {
+    const supportedKeys = [
+      "Backspace", "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown",
+      "ArrowLeft", "ArrowRight", "Delete", "Home", "End", "PageUp", "PageDown", " "
+    ];
+    if (event.key.length === 1 || supportedKeys.includes(event.key)) {
       event.preventDefault();
       channel.send(JSON.stringify({ kind: "key", key: event.key }));
     }
@@ -1083,8 +1109,10 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
                     <video ref={remoteVideoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain bg-black"/>
                     <div
                       tabIndex={0}
+                      onPointerDown={event => event.currentTarget.focus()}
                       onPointerMove={event => sendRemotePointer(event, "pointer")}
                       onPointerUp={event => sendRemotePointer(event, "click")}
+                      onContextMenu={event => event.preventDefault()}
                       onKeyDown={sendRemoteKey}
                       onWheel={event => {
                         event.preventDefault();
