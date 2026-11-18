@@ -5,9 +5,9 @@ const {
   getNativeInputCapabilities
 } = require("../desktop/native-input.cjs");
 
-test("native input adapter clamps pointer and click coordinates", () => {
+test("native input adapter preserves virtual-screen coordinates within bounds", () => {
   assert.deepEqual(validateInput({ kind: "pointer", x: -5, y: 100001 }), {
-    kind: "pointer", x: 0, y: 100000, button: "left"
+    kind: "pointer", x: -5, y: 100000, button: "left"
   });
   assert.deepEqual(validateInput({ kind: "click", x: 640, y: 360, button: "right" }), {
     kind: "click", x: 640, y: 360, button: "right"
