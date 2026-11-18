@@ -633,7 +633,7 @@ export default function App() {
                 content: `Model ${modelInfo.name} currently unavailable. The high-fidelity asset is not present in the local repository.`,
                 timestamp: Date.now()
               }]);
-              return "";
+              return;
             }
           }
         }
