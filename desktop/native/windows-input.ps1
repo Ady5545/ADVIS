@@ -19,7 +19,7 @@ switch ($Action) {
   "scroll" {
     if ($DeltaY -ne 0) {
       $ticks = [int](120 * [Math]::Min(10,[Math]::Ceiling([Math]::Abs($DeltaY)/100)))
-      if ($DeltaY -lt 0) { $ticks = -$ticks }
+      if ($DeltaY -gt 0) { $ticks = -$ticks }
       $wheelData = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$ticks),0)
       [AdvisNativeInput]::mouse_event([AdvisNativeInput]::WHEEL,0,0,$wheelData,[UIntPtr]::Zero)
     }
