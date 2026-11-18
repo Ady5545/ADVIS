@@ -324,6 +324,57 @@ async function createApp() {
     return auth;
   }
 
+  // A direct WebRTC connection outlives its signaling requests. When a device
+  // loses authorization, explicitly end every session involving it and notify
+  // the still-enrolled peer so an already-open media/data connection is closed.
+  async function endNetworkSessionsForDevice(networkId, revokedDeviceId, reason) {
+    if (!networkStore?.listNetworkSessions || !networkStore?.getNetworkSession) return;
+    const sessions = await networkStore.listNetworkSessions(networkId);
+    for (const summary of sessions) {
+      const isController = summary.controllerDeviceId === revokedDeviceId;
+      const isTarget = summary.targetDeviceId === revokedDeviceId;
+      if ((!isController && !isTarget) || summary.status === "ENDED") continue;
+
+      const sessionId = String(summary.id || "");
+      const peerDeviceId = isController ? summary.targetDeviceId : summary.controllerDeviceId;
+      if (!sessionId || !safeDeviceId(peerDeviceId)) continue;
+
+      const now = Date.now();
+      const current = await networkStore.getNetworkSession(networkId, sessionId);
+      if (!current || current.status === "ENDED") continue;
+
+      try {
+        await networkStore.updateNetworkSession(networkId, {
+          ...current,
+          status: "ENDED",
+          endedAt: now,
+          updatedAt: now,
+          lastSignalAt: now
+        });
+      } catch (error) {
+        // Continue with the peer notification even if a concurrent session
+        // update won the race; the revoked device must not retain a live peer.
+        console.warn("[ADVIS Network] session end update:", error.message || error);
+      }
+
+      const peer = await networkStore.getNetworkDevice(networkId, peerDeviceId);
+      if (!peer) continue;
+      const command = {
+        id: "cmd_" + crypto.randomBytes(18).toString("hex"),
+        networkId,
+        fromDeviceId: revokedDeviceId,
+        fromDeviceName: "ADVIS Network Security",
+        targetDeviceId: peerDeviceId,
+        kind: "RTC_SIGNAL",
+        payload: { sessionId, type: "END", reason: String(reason || "Device authorization was revoked.") },
+        status: "PENDING",
+        createdAt: now,
+        expiresAt: now + 120_000
+      };
+      await networkStore.createNetworkCommand(networkId, peerDeviceId, command);
+    }
+  }
+
   app.post("/api/network/create", async (req, res) => {
     try {
       if (!networkStore?.createNetwork) return res.status(503).json({ error: "Cloud device networking is unavailable until Firestore is configured." });
@@ -434,6 +485,7 @@ async function createApp() {
         return res.status(403).json({ error: "The owner device cannot self-revoke. Use owner network controls instead." });
       }
       if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "self_revoke_device", 3, 10 * 60_000)) return;
+      await endNetworkSessionsForDevice(auth.networkId, auth.deviceId, "This browser revoked its own network access.");
       await networkStore.deleteNetworkDevice(auth.networkId, auth.deviceId);
       return res.json({ success: true, revokedDeviceId: auth.deviceId, revokedAt: Date.now() });
     } catch (error) {
@@ -453,6 +505,7 @@ async function createApp() {
       }
       const target = await networkStore.getNetworkDevice(auth.networkId, targetDeviceId);
       if (!target) return res.status(404).json({ error: "The selected device is not enrolled." });
+      await endNetworkSessionsForDevice(auth.networkId, targetDeviceId, "The owner revoked this device's network access.");
       await networkStore.deleteNetworkDevice(auth.networkId, targetDeviceId);
       return res.json({ success: true, revokedDeviceId: targetDeviceId, revokedAt: Date.now() });
     } catch (error) {
@@ -469,6 +522,7 @@ async function createApp() {
       const devices = await networkStore.listNetworkDevices(auth.networkId);
       const targets = devices.filter(device => device.id !== auth.deviceId);
       for (const device of targets) {
+        await endNetworkSessionsForDevice(auth.networkId, device.id, "The owner revoked all member-device access.");
         await networkStore.deleteNetworkDevice(auth.networkId, device.id);
       }
       return res.json({ success: true, revokedCount: targets.length, revokedAt: Date.now() });
