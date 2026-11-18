@@ -1280,7 +1280,7 @@ export default function App() {
       })()}
 
       <HolographicCursor handTracking={handTracking} isSpatial={!!currentSpatialObject || !!activeLearningSession} />
-      <DeviceNetwork visible={currentView === 'devices'} />
+      <DeviceNetwork visible={currentView === 'devices'} onClose={() => setCurrentView('home')} />
 
       <ViewModal 
         currentView={currentView} 
