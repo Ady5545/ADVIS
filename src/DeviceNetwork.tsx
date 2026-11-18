@@ -149,7 +149,7 @@ function attachRemoteInputChannel(channel: RTCDataChannel) {
   };
 }
 
-export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
+export function DeviceNetwork({ visible = false, onClose }: { visible?: boolean; onClose?: () => void }) {
   const [networkId, setNetworkId] = useState(() => localStorage.getItem(NETWORK_KEY) || "");
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [ownerToken, setOwnerToken] = useState(() => localStorage.getItem(OWNER_TOKEN_KEY) || "");
@@ -836,6 +836,13 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     addActivity("DEVICE DISCONNECTED", "This browser has removed its local network credentials. The owner should revoke it to invalidate the server token.");
   };
 
+  const handleClose = () => {
+    // Hiding the Devices window must not leave a remote session running invisibly.
+    if (remoteSessionMode) void stopRemoteSession();
+    if (remoteSessionRequest) void rejectRemoteSession();
+    onClose?.();
+  };
+
   if (!visible) return null;
 
   return (
@@ -847,9 +854,14 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
           <h3 className="text-cyan-300 font-bold tracking-widest">ADVIS GLOBAL DEVICE NETWORK</h3>
           <p className="text-[11px] text-cyan-500/60 mt-1">Encrypted credentials · worldwide presence · consent-based control</p>
         </div>
+        <div className="flex items-center gap-2 shrink-0">
         <span className={networkId && deviceToken ? "text-green-300 text-[10px] border border-green-400/30 bg-green-400/10 px-2 py-1 rounded" : "text-amber-300 text-[10px] border border-amber-400/30 bg-amber-400/10 px-2 py-1 rounded"}>
           {networkId && deviceToken ? "NETWORK LINKED" : "NOT CONNECTED"}
         </span>
+        <button type="button" onClick={handleClose} aria-label="Close device network window" title="Close" className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-cyan-400/25 text-cyan-200/70 hover:text-cyan-100 hover:bg-cyan-400/10 hover:border-cyan-300/50 transition-colors">
+          <X size={14}/>
+        </button>
+        </div>
       </div>
 
       <div className="bg-black/40 border border-cyan-500/20 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-2">
