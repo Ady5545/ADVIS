@@ -416,6 +416,42 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
     }
   };
 
+  const revokeThisBrowser = async () => {
+    if (!networkId || !deviceToken || ownerToken) return;
+    if (!window.confirm("Remove this browser's saved ADVIS authorization? You will need a fresh one-time invitation to use it again.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (remoteSessionId) await stopRemoteSession();
+      if (remoteSessionRequest) await rejectRemoteSession();
+      await readJson(await fetch("/api/network/device/self-revoke", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ networkId, deviceId })
+      }));
+      localStorage.removeItem(NETWORK_KEY);
+      localStorage.removeItem(OWNER_TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY);
+      setNetworkId("");
+      setDeviceToken("");
+      setOwnerToken("");
+      setDevices([]);
+      setSelectedDevice("");
+      setInviteInput("");
+      setInviteLink("");
+      setRemoteSessionId("");
+      setRemoteSessionPeerId("");
+      setRemoteSessionMode("");
+      setRemoteSessionStatus("");
+      setRemoteStream(null);
+      addActivity("BROWSER ACCESS REVOKED", "This browser removed its own saved authorization from the ADVIS private network.");
+    } catch (e: any) {
+      setError(e.message || "Could not revoke this browser's saved authorization.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const revokeAllMembers = async () => {
     if (!ownerToken) return;
     try {
@@ -988,6 +1024,10 @@ export function DeviceNetwork({ visible = false }: { visible?: boolean }) {
               ))}
               {!devices.length && <p className="text-xs text-cyan-500/50">Waiting for enrolled devices...</p>}
               {ownerToken && devices.some(device => !device.current) && <button onClick={revokeAllMembers} className="mt-3 text-[10px] text-red-300 border border-red-400/30 rounded px-3 py-2">REVOKE ALL MEMBER DEVICES</button>}
+              {networkId && deviceToken && !ownerToken && <div className="mt-3 flex flex-col items-start gap-2">
+                <button onClick={revokeThisBrowser} disabled={busy} className="text-[10px] text-red-300 border border-red-400/30 rounded px-3 py-2 disabled:opacity-50">REMOVE THIS BROWSER FROM MY NETWORK</button>
+                <p className="text-[10px] text-cyan-500/60">Use this before leaving a shared or school computer. Its saved authorization will be revoked server-side.</p>
+              </div>}
             </div>
           </div>
 
