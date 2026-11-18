@@ -1693,7 +1693,7 @@ Output JSON only, in this exact format:
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = require("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true, allowedHosts: true },
+      server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
