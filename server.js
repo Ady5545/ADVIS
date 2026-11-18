@@ -424,6 +424,24 @@ async function createApp() {
     }
   });
 
+  // A browser enrolled as a member can remove its own persistent authorization.
+  // The owner device is deliberately excluded so the network cannot orphan itself.
+  app.post("/api/network/device/self-revoke", async (req, res) => {
+    try {
+      const auth = await authenticateNetworkDevice(req, res);
+      if (!auth) return;
+      if (auth.device.role === "OWNER" || auth.network.ownerDeviceId === auth.deviceId) {
+        return res.status(403).json({ error: "The owner device cannot self-revoke. Use owner network controls instead." });
+      }
+      if (!await enforceNetworkRateLimit(res, auth.networkId, auth.deviceId, "self_revoke_device", 3, 10 * 60_000)) return;
+      await networkStore.deleteNetworkDevice(auth.networkId, auth.deviceId);
+      return res.json({ success: true, revokedDeviceId: auth.deviceId, revokedAt: Date.now() });
+    } catch (error) {
+      console.error("[ADVIS Network] self-revoke:", error);
+      return res.status(503).json({ error: "Could not remove this browser from the private network." });
+    }
+  });
+
   app.post("/api/network/devices/:targetDeviceId/revoke", async (req, res) => {
     try {
       const auth = await authenticateNetworkOwner(req, res);
